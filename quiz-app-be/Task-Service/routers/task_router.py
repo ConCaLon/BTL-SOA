@@ -278,7 +278,11 @@ async def admin_get_questions(data: dict):
         )
     if response.status_code == 200:
         return response.json()
-    return {"status": "failed", "message": "Lỗi lấy câu hỏi"}
+    try:
+        msg = response.json().get("message", "Lỗi lấy câu hỏi")
+    except Exception:
+        msg = "Lỗi lấy câu hỏi"
+    return {"status": "failed", "message": msg}
 
 
 @router.post("/admin/questions/create")
@@ -290,7 +294,11 @@ async def admin_create_question(data: dict):
         )
     if response.status_code == 200:
         return response.json()
-    return {"status": "failed", "message": "Lỗi tạo câu hỏi"}
+    try:
+        msg = response.json().get("message", "Lỗi tạo câu hỏi")
+    except Exception:
+        msg = "Lỗi tạo câu hỏi"
+    return {"status": "failed", "message": msg}
 
 
 @router.put("/admin/questions/update")
@@ -302,13 +310,16 @@ async def admin_update_question(data: dict):
         )
     if response.status_code == 200:
         return response.json()
-    return {"status": "failed", "message": "Lỗi cập nhật câu hỏi"}
+    try:
+        msg = response.json().get("message", "Lỗi cập nhật câu hỏi")
+    except Exception:
+        msg = "Lỗi cập nhật câu hỏi"
+    return {"status": "failed", "message": msg}
 
 
 @router.delete("/admin/questions/delete")
 async def admin_delete_question(data: dict):
     async with httpx.AsyncClient(verify=False) as client:
-        # httpx delete không hỗ trợ body JSON mặc định tốt, nên dùng request method
         response = await client.request(
             method="DELETE",
             url=f'{QUESTION_SERVICE_URL}/delete_question',
@@ -316,7 +327,11 @@ async def admin_delete_question(data: dict):
         )
     if response.status_code == 200:
         return response.json()
-    return {"status": "failed", "message": "Lỗi xóa câu hỏi"}
+    try:
+        msg = response.json().get("message", "Lỗi xóa câu hỏi")
+    except Exception:
+        msg = "Lỗi xóa câu hỏi"
+    return {"status": "failed", "message": msg}
 
 
 # ==========================================
@@ -328,7 +343,11 @@ async def admin_get_tests():
         response = await client.get(f'{TEST_SERVICE_URL}/tests')
     if response.status_code == 200:
         return response.json()
-    return {"status": "failed", "message": "Lỗi lấy danh sách bài thi"}
+    try:
+        msg = response.json().get("message", "Lỗi lấy danh sách bài thi")
+    except Exception:
+        msg = "Lỗi lấy danh sách bài thi"
+    return {"status": "failed", "message": msg}
 
 @router.post("/admin/tests/create")
 async def admin_create_test(data: dict):
@@ -339,7 +358,11 @@ async def admin_create_test(data: dict):
         )
     if response.status_code == 200:
         return response.json()
-    return {"status": "failed", "message": "Lỗi tạo bài thi"}
+    try:
+        msg = response.json().get("message", "Lỗi tạo bài thi")
+    except Exception:
+        msg = "Lỗi tạo bài thi"
+    return {"status": "failed", "message": msg}
 
 @router.put("/admin/tests/update")
 async def admin_update_test(data: dict):
@@ -350,7 +373,11 @@ async def admin_update_test(data: dict):
         )
     if response.status_code == 200:
         return response.json()
-    return {"status": "failed", "message": "Lỗi cập nhật bài thi"}
+    try:
+        msg = response.json().get("message", "Lỗi cập nhật bài thi")
+    except Exception:
+        msg = "Lỗi cập nhật bài thi"
+    return {"status": "failed", "message": msg}
 
 @router.delete("/admin/tests/delete")
 async def admin_delete_test(data: dict):
@@ -362,4 +389,41 @@ async def admin_delete_test(data: dict):
         )
     if response.status_code == 200:
         return response.json()
-    return {"status": "failed", "message": "Lỗi xóa bài thi"}
+    try:
+        msg = response.json().get("message", "Lỗi xóa bài thi")
+    except Exception:
+        msg = "Lỗi xóa bài thi"
+    return {"status": "failed", "message": msg}
+
+
+@router.get("/settings/background")
+async def get_background_setting():
+    async with httpx.AsyncClient(verify=False) as client:
+        try:
+            response = await client.get(
+                url=f'{QUESTION_SERVICE_URL}/settings/background',
+                timeout=5.0
+            )
+            if response.status_code == 200:
+                return response.json()
+        except Exception:
+            pass
+    return {"status": "failed", "message": "Không thể lấy cấu hình ảnh nền"}
+
+
+@router.post("/settings/background")
+async def save_background_setting(data: dict):
+    async with httpx.AsyncClient(verify=False) as client:
+        try:
+            response = await client.post(
+                url=f'{QUESTION_SERVICE_URL}/settings/background',
+                json=data,
+                timeout=15.0
+            )
+            if response.status_code == 200:
+                return response.json()
+        except Exception as e:
+            return {"status": "failed", "message": f"Lỗi lưu ảnh nền: {str(e)}"}
+    return {"status": "failed", "message": "Không thể lưu cấu hình ảnh nền"}
+
+

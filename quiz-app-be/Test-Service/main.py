@@ -1,10 +1,10 @@
 import uvicorn
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
-from router.authen_router import router as authen_router
+from routers.test_router import router as test_router
 from constants import FAPP_PORT
 
-app = FastAPI(title="Authen Service", version="1.0.0")
+app = FastAPI(title="Test Service", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,7 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(authen_router)
+app.include_router(test_router)
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="127.0.0.1", port=int(FAPP_PORT or 8001), reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=int(FAPP_PORT or 8006), reload=True)

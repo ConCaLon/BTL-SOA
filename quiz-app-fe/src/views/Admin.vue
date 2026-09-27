@@ -22,6 +22,16 @@ const tests = ref([])
 const selectedTestId = ref(null)
 const loading = ref(false)
 
+const currentSelectedTest = computed(() => {
+    return tests.value.find(t => t._id === selectedTestId.value) || null
+})
+
+function navigateToQuestions(testId) {
+    selectedTestId.value = testId
+    activeTab.value = 'questions'
+    fetchQuestions()
+}
+
 // Search filters
 const testSearchQuery = ref('')
 const resultSearchQuery = ref('')
@@ -123,6 +133,11 @@ const testColumns = [
     { title: 'Tên bài thi', key: 'name' },
     { title: 'Thời gian', key: 'time', render: (row) => `${row.time} phút` },
     { 
+        title: 'Số câu hỏi', 
+        key: 'question_count',
+        render: (row) => h(NTag, { type: (row.question_count > 0 ? 'info' : 'default'), size: 'small' }, { default: () => `${row.question_count || 0} câu` })
+    },
+    { 
         title: 'Sinh viên được thi', 
         key: 'list_students',
         render: (row) => {
@@ -134,6 +149,7 @@ const testColumns = [
     { title: 'Hành động', key: 'actions', render: (row) => {
         return h(NSpace, {}, {
             default: () => [
+                h(NButton, { size: 'small', type: 'primary', ghost: true, onClick: () => navigateToQuestions(row._id) }, { default: () => '❓ Câu hỏi' }),
                 h(NButton, { size: 'small', type: 'info', onClick: () => openEditTestModal(row) }, { default: () => 'Sửa' }),
                 h(NPopconfirm, {
                     onPositiveClick: () => deleteTest(row._id),
@@ -141,7 +157,7 @@ const testColumns = [
                     negativeText: 'Hủy'
                 }, {
                     trigger: () => h(NButton, { size: 'small', type: 'error' }, { default: () => 'Xóa' }),
-                    default: () => 'Xóa mã đề sẽ mồ côi các câu hỏi thuộc mã đề này. Xác nhận xóa?'
+                    default: () => `Xóa mã đề ${row.test_code}? Thao tác này sẽ xóa cả các câu hỏi thuộc mã đề!`
                 })
             ]
         })
@@ -195,12 +211,23 @@ const resultColumns = [
 ]
 
 const questionColumns = [
-    { title: 'Câu hỏi', key: 'text' },
-    { title: 'Đáp án đúng', key: 'correct', render: (row) => {
-        const correctAns = row.answers ? row.answers.find(a => a.is_correct) : null
-        return correctAns ? h(NTag, { type: 'success' }, { default: () => correctAns.text }) : 'N/A'
-    }},
-    { title: 'Hành động', key: 'actions', render: (row) => {
+    { title: 'STT', key: 'index', width: 60, render: (_, index) => index + 1 },
+    { title: 'Nội dung câu hỏi', key: 'text', ellipsis: { tooltip: true } },
+    { 
+        title: 'Các phương án & Đáp án đúng', 
+        key: 'answers',
+        render: (row) => {
+            if (!row.answers || row.answers.length === 0) return 'N/A'
+            return h('div', { style: 'display: flex; flex-direction: column; gap: 4px;' }, row.answers.map((a, idx) => {
+                const label = `${String.fromCharCode(65 + idx)}. ${a.text}`
+                if (a.is_correct) {
+                    return h(NTag, { type: 'success', size: 'small', style: 'font-weight: bold;' }, { default: () => `✓ ${label} (Đúng)` })
+                }
+                return h('span', { style: 'font-size: 13px; color: #475569;' }, label)
+            }))
+        }
+    },
+    { title: 'Hành động', key: 'actions', width: 140, render: (row) => {
         return h(NSpace, {}, {
             default: () => [
                 h(NButton, { size: 'small', type: 'info', onClick: () => openEditModal(row) }, { default: () => 'Sửa' }),
@@ -222,6 +249,7 @@ function handleLogin() {
         isAuthenticated.value = true
         loginError.value = ''
         fetchData()
+        fetchBgSettings()
     } else {
         loginError.value = 'Sai tài khoản hoặc mật khẩu! (Mặc định: admin / admin)'
     }
@@ -238,20 +266,51 @@ async function fetchData() {
         ])
 
         if (resTests.data.status === 'success') {
-            tests.value = resTests.data.data
-            if (!selectedTestId.value && tests.value.length > 0) {
-                selectedTestId.value = tests.value[0]._id
+            tests.value = resTests.data.data || []
+            if (tests.value.length > 0) {
+                const exists = tests.value.some(t => t._id === selectedTestId.value)
+                if (!exists) {
+                    selectedTestId.value = tests.value[0]._id
+                }
+            } else {
+                selectedTestId.value = null
             }
         }
-        if (resStudents.data.status === 'success') students.value = resStudents.data.data
-        if (resResults.data.status === 'success') results.value = resResults.data.data
+        if (resStudents.data.status === 'success') students.value = resStudents.data.data || []
+        if (resResults.data.status === 'success') results.value = resResults.data.data || []
 
+        // Luôn load câu hỏi nếu đang ở tab questions và có test được chọn
         if (activeTab.value === 'questions' && selectedTestId.value) {
-            const resQ = await axios.post(`${API_BASE}/task_service/admin/questions`, { test_id: selectedTestId.value })
-            if (resQ.data.status === 'success') questions.value = resQ.data.data
+            await fetchQuestions()
         }
     } catch (error) {
         console.error("Lỗi lấy dữ liệu Admin qua ApiGateway:", error)
+    } finally {
+        loading.value = false
+    }
+}
+
+async function fetchQuestions() {
+    if (!selectedTestId.value) {
+        questions.value = []
+        return
+    }
+    loading.value = true
+    try {
+        const resQ = await axios.post(`${API_BASE}/task_service/admin/questions`, { test_id: selectedTestId.value })
+        if (resQ.data.status === 'success') {
+            questions.value = resQ.data.data || []
+            // Đồng bộ lại question_count trong danh sách tests
+            const curTest = tests.value.find(t => t._id === selectedTestId.value)
+            if (curTest) {
+                curTest.question_count = questions.value.length
+            }
+        } else {
+            questions.value = []
+        }
+    } catch (error) {
+        console.error("Lỗi lấy câu hỏi:", error)
+        questions.value = []
     } finally {
         loading.value = false
     }
@@ -371,6 +430,15 @@ function openEditTestModal(t) {
 }
 
 async function saveTest() {
+    if (!testForm.value.test_code || !testForm.value.test_code.trim()) {
+        alert("Vui lòng nhập Mã đề thi (viết liền, ví dụ: SOA_01)!")
+        return
+    }
+    if (!testForm.value.name || !testForm.value.name.trim()) {
+        alert("Vui lòng nhập Tên bài thi!")
+        return
+    }
+
     loading.value = true
     try {
         const studentList = testForm.value.list_students
@@ -378,8 +446,8 @@ async function saveTest() {
             : []
             
         const payload = {
-            test_code: testForm.value.test_code,
-            name: testForm.value.name,
+            test_code: testForm.value.test_code.trim(),
+            name: testForm.value.name.trim(),
             time: parseInt(testForm.value.time) || 45,
             list_students: studentList
         }
@@ -414,7 +482,10 @@ async function saveTest() {
         }
 
         showTestModal.value = false
-        fetchData()
+        if (res.data && res.data.data && res.data.data._id) {
+            selectedTestId.value = res.data.data._id
+        }
+        await fetchData()
     } catch (error) {
         console.error("Lỗi lưu test:", error)
         alert(error.response?.data?.message || "Lỗi lưu mã đề thi!")
@@ -426,10 +497,18 @@ async function saveTest() {
 async function deleteTest(id) {
     loading.value = true
     try {
-        await axios.delete(`${API_BASE}/task_service/admin/tests/delete`, { data: { test_id: id } })
-        fetchData()
+        const res = await axios.delete(`${API_BASE}/task_service/admin/tests/delete`, { data: { test_id: id } })
+        if (res.data && res.data.status === 'failed') {
+            alert(res.data.message || "Lỗi xóa mã đề!")
+            return
+        }
+        if (selectedTestId.value === id) {
+            selectedTestId.value = null
+        }
+        await fetchData()
     } catch (error) {
         console.error("Lỗi xóa test:", error)
+        alert(error.response?.data?.message || "Lỗi xóa bài thi!")
     } finally {
         loading.value = false
     }
@@ -647,9 +726,23 @@ function openCreateModal() {
 function openEditModal(question) {
     isEditing.value = true
     editingQuestionId.value = question._id
+    
+    let answers = []
+    if (question.answers && Array.isArray(question.answers) && question.answers.length > 0) {
+        answers = JSON.parse(JSON.stringify(question.answers))
+    }
+    // Đảm bảo tối thiểu 4 đáp án
+    while (answers.length < 4) {
+        answers.push({ text: '', is_correct: false })
+    }
+    // Đảm bảo có ít nhất 1 đáp án được đánh dấu đúng
+    if (!answers.some(a => a.is_correct)) {
+        answers[0].is_correct = true
+    }
+
     questionForm.value = {
-        text: question.text,
-        answers: JSON.parse(JSON.stringify(question.answers))
+        text: question.text || '',
+        answers: answers
     }
     showQuestionModal.value = true
 }
@@ -661,25 +754,59 @@ function setCorrectAnswer(index) {
 }
 
 async function saveQuestion() {
+    if (!questionForm.value.text || !questionForm.value.text.trim()) {
+        alert("Vui lòng nhập nội dung câu hỏi!")
+        return
+    }
+    const emptyAns = questionForm.value.answers.some(a => !a.text || !a.text.trim())
+    if (emptyAns) {
+        alert("Vui lòng điền đầy đủ nội dung cho tất cả các đáp án A, B, C, D!")
+        return
+    }
+    const hasCorrect = questionForm.value.answers.some(a => a.is_correct)
+    if (!hasCorrect) {
+        alert("Vui lòng chọn một đáp án đúng (tích vào nút tròn)!")
+        return
+    }
+
     loading.value = true
     try {
+        let res
+        const formattedAnswers = questionForm.value.answers.map(a => ({
+            text: a.text.trim(),
+            is_correct: !!a.is_correct
+        }))
+
         if (isEditing.value) {
-            await axios.put(`${API_BASE}/task_service/admin/questions/update`, {
+            res = await axios.put(`${API_BASE}/task_service/admin/questions/update`, {
                 question_id: editingQuestionId.value,
-                text: questionForm.value.text,
-                answers: questionForm.value.answers
+                text: questionForm.value.text.trim(),
+                answers: formattedAnswers
             })
         } else {
-            await axios.post(`${API_BASE}/task_service/admin/questions/create`, {
+            res = await axios.post(`${API_BASE}/task_service/admin/questions/create`, {
                 test_id: selectedTestId.value,
-                text: questionForm.value.text,
-                answers: questionForm.value.answers
+                text: questionForm.value.text.trim(),
+                answers: formattedAnswers
             })
         }
+
+        if (res.data && res.data.status === 'failed') {
+            alert(res.data.message || "Lỗi lưu câu hỏi!")
+            return
+        }
+
         showQuestionModal.value = false
-        fetchData()
+        await fetchQuestions()
+        
+        // Cập nhật lại số câu hỏi trong danh sách tests
+        const curTest = tests.value.find(t => t._id === selectedTestId.value)
+        if (curTest) {
+            curTest.question_count = questions.value.length
+        }
     } catch (error) {
         console.error("Lỗi lưu câu hỏi:", error)
+        alert(error.response?.data?.message || "Lỗi kết nối khi lưu câu hỏi!")
     } finally {
         loading.value = false
     }
@@ -688,18 +815,216 @@ async function saveQuestion() {
 async function deleteQuestion(id) {
     loading.value = true
     try {
-        await axios.delete(`${API_BASE}/task_service/admin/questions/delete`, {
+        const res = await axios.delete(`${API_BASE}/task_service/admin/questions/delete`, {
             data: { question_id: id }
         })
-        fetchData()
+        if (res.data && res.data.status === 'failed') {
+            alert(res.data.message || "Lỗi xóa câu hỏi!")
+            return
+        }
+        await fetchQuestions()
+        
+        // Cập nhật lại số câu hỏi trong danh sách tests
+        const curTest = tests.value.find(t => t._id === selectedTestId.value)
+        if (curTest) {
+            curTest.question_count = questions.value.length
+        }
     } catch (error) {
         console.error("Lỗi xóa câu hỏi:", error)
+        alert(error.response?.data?.message || "Lỗi xóa câu hỏi!")
     } finally {
         loading.value = false
     }
 }
 
+// ================= CÀI ĐẶT HÌNH NỀN ĐĂNG NHẬP =================
+const currentBgImage = ref(localStorage.getItem("quiz_app_bg_image") || "")
+const currentBgDim = ref(Number(localStorage.getItem("quiz_app_bg_dim")) || 45)
+const currentBgBlur = ref(Number(localStorage.getItem("quiz_app_bg_blur")) || 0)
+
+const tempBgImage = ref(localStorage.getItem("quiz_app_bg_image") || "")
+const tempBgDim = ref(Number(localStorage.getItem("quiz_app_bg_dim")) || 45)
+const tempBgBlur = ref(Number(localStorage.getItem("quiz_app_bg_blur")) || 0)
+const bgTab = ref("upload") // 'upload' | 'url' | 'presets'
+const inputBgUrl = ref("")
+const bgFileInputRef = ref(null)
+const uploadingBgFileName = ref("")
+const isProcessingBgImage = ref(false)
+const isSavingBg = ref(false)
+const bgSuccessMsg = ref("")
+
+const presetWallpapers = ref([
+    {
+        name: "Giảng đường & Campus",
+        url: "https://images.unsplash.com/photo-1541339907198-e08756dedf3f?q=80&w=1920&auto=format&fit=crop"
+    },
+    {
+        name: "Thư viện Đại học Hiện đại",
+        url: "https://images.unsplash.com/photo-1521587760476-6c12a4b040da?q=80&w=1920&auto=format&fit=crop"
+    },
+    {
+        name: "Công nghệ Số & Không gian IT",
+        url: "https://images.unsplash.com/photo-1518770660439-4636190af475?q=80&w=1920&auto=format&fit=crop"
+    },
+    {
+        name: "Bầu trời Đêm Tối giản",
+        url: "https://images.unsplash.com/photo-1519681393784-d120267933ba?q=80&w=1920&auto=format&fit=crop"
+    }
+])
+
+function compressAndReadImage(file, maxWidth = 1920, maxHeight = 1080, quality = 0.85) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = (e) => {
+            const img = new Image()
+            img.onload = () => {
+                let width = img.width
+                let height = img.height
+
+                if (width > maxWidth) {
+                    height = Math.round((height * maxWidth) / width)
+                    width = maxWidth
+                }
+                if (height > maxHeight) {
+                    width = Math.round((width * maxHeight) / height)
+                    height = maxHeight
+                }
+
+                const canvas = document.createElement("canvas")
+                canvas.width = width
+                canvas.height = height
+                const ctx = canvas.getContext("2d")
+                ctx.drawImage(img, 0, 0, width, height)
+                const dataUrl = canvas.toDataURL("image/jpeg", quality)
+                resolve(dataUrl)
+            }
+            img.onerror = () => reject(new Error("Lỗi nạp hình ảnh"))
+            img.src = e.target.result
+        }
+        reader.onerror = () => reject(new Error("Lỗi đọc file từ máy tính"))
+        reader.readAsDataURL(file)
+    })
+}
+
+function triggerBgFileInput() {
+    if (bgFileInputRef.value) {
+        bgFileInputRef.value.click()
+    }
+}
+
+async function onBgFileSelected(event) {
+    const file = event.target.files && event.target.files[0]
+    if (!file) return
+    await processBgImageFile(file)
+}
+
+async function onBgFileDrop(event) {
+    event.preventDefault()
+    const file = event.dataTransfer?.files?.[0]
+    if (!file) return
+    await processBgImageFile(file)
+}
+
+async function processBgImageFile(file) {
+    if (!file.type.startsWith("image/")) {
+        alert("Vui lòng chọn một file hình ảnh hợp lệ (PNG, JPG, JPEG, WEBP)!")
+        return
+    }
+
+    isProcessingBgImage.value = true
+    try {
+        const compressedBase64 = await compressAndReadImage(file, 1920, 1080, 0.85)
+        tempBgImage.value = compressedBase64
+        uploadingBgFileName.value = `${file.name} (${(file.size / 1024).toFixed(1)} KB)`
+    } catch (err) {
+        console.error("Lỗi đọc ảnh:", err)
+        alert("Không thể đọc file ảnh này. Vui lòng thử ảnh khác!")
+    } finally {
+        isProcessingBgImage.value = false
+        if (bgFileInputRef.value) bgFileInputRef.value.value = ""
+    }
+}
+
+function applyBgUrlImage() {
+    const url = inputBgUrl.value.trim()
+    if (!url) {
+        alert("Vui lòng nhập đường link ảnh!")
+        return
+    }
+    tempBgImage.value = url
+    uploadingBgFileName.value = "Ảnh từ URL"
+}
+
+function selectBgPreset(url, name) {
+    tempBgImage.value = url
+    uploadingBgFileName.value = name || "Ảnh mẫu có sẵn"
+}
+
+function resetBgDefault() {
+    tempBgImage.value = ""
+    tempBgDim.value = 45
+    tempBgBlur.value = 0
+    uploadingBgFileName.value = ""
+    inputBgUrl.value = ""
+}
+
+async function saveBgSettings() {
+    isSavingBg.value = true
+    currentBgImage.value = tempBgImage.value
+    currentBgDim.value = tempBgDim.value
+    currentBgBlur.value = tempBgBlur.value
+
+    if (currentBgImage.value) {
+        localStorage.setItem("quiz_app_bg_image", currentBgImage.value)
+        localStorage.setItem("quiz_app_bg_dim", String(currentBgDim.value))
+        localStorage.setItem("quiz_app_bg_blur", String(currentBgBlur.value))
+    } else {
+        localStorage.removeItem("quiz_app_bg_image")
+        localStorage.removeItem("quiz_app_bg_dim")
+        localStorage.removeItem("quiz_app_bg_blur")
+    }
+
+    try {
+        await axios.post(`${API_BASE}/task_service/settings/background`, {
+            image: currentBgImage.value,
+            dim: currentBgDim.value,
+            blur: currentBgBlur.value
+        })
+    } catch (err) {
+        console.log("Lỗi đồng bộ cấu hình lên backend:", err.message)
+    } finally {
+        isSavingBg.value = false
+        bgSuccessMsg.value = "✅ Đã lưu và áp dụng hình nền thành công cho trang đăng nhập sinh viên!"
+        setTimeout(() => {
+            bgSuccessMsg.value = ""
+        }, 5000)
+    }
+}
+
+async function fetchBgSettings() {
+    try {
+        const res = await axios.get(`${API_BASE}/task_service/settings/background`)
+        if (res.data?.status === 'success' && res.data?.data) {
+            const data = res.data.data
+            currentBgImage.value = data.image || ""
+            currentBgDim.value = data.dim ?? 45
+            currentBgBlur.value = data.blur ?? 0
+            tempBgImage.value = currentBgImage.value
+            tempBgDim.value = currentBgDim.value
+            tempBgBlur.value = currentBgBlur.value
+            if (currentBgImage.value) {
+                localStorage.setItem("quiz_app_bg_image", currentBgImage.value)
+                localStorage.setItem("quiz_app_bg_dim", String(currentBgDim.value))
+                localStorage.setItem("quiz_app_bg_blur", String(currentBgBlur.value))
+            }
+        }
+    } catch (e) {
+        // Giữ nguyên giá trị từ localStorage
+    }
+}
+
 onMounted(() => {
+    fetchBgSettings()
     if (isAuthenticated.value) fetchData()
 })
 </script>
@@ -742,12 +1067,13 @@ onMounted(() => {
                         <div class="logo">
                             <h2>🛡️ Admin Panel</h2>
                         </div>
-                        <n-menu :value="activeTab" @update:value="val => { activeTab = val; fetchData(); }" :options="[
+                        <n-menu :value="activeTab" @update:value="async (val) => { activeTab = val; if (val === 'questions') { await fetchData(); await fetchQuestions(); } else if (val === 'wallpaper') { await fetchBgSettings(); } else { fetchData(); } }" :options="[
                             { label: '📊 Tổng quan Dashboard', key: 'dashboard' },
                             { label: '📝 Quản lý Đề thi', key: 'tests' },
                             { label: '❓ Ngân hàng câu hỏi', key: 'questions' },
                             { label: '🏆 Kết quả thi', key: 'results' },
-                            { label: '🎓 Danh sách sinh viên', key: 'students' }
+                            { label: '🎓 Danh sách sinh viên', key: 'students' },
+                            { label: '🖼️ Cài đặt hình nền', key: 'wallpaper' }
                         ]" />
                         <div style="padding: 20px; position: absolute; bottom: 0;">
                             <router-link to="/">
@@ -763,6 +1089,7 @@ onMounted(() => {
                                 <span v-else-if="activeTab === 'tests'">📝 Quản lý Mã Đề Thi</span>
                                 <span v-else-if="activeTab === 'results'">🏆 Quản lý Kết quả thi</span>
                                 <span v-else-if="activeTab === 'students'">🎓 Quản lý Sinh viên & Tài khoản</span>
+                                <span v-else-if="activeTab === 'wallpaper'">🖼️ Cài Đặt Hình Nền Trang Đăng Nhập</span>
                                 <span v-else>❓ Ngân hàng Câu hỏi</span>
                             </h2>
                             <div>
@@ -839,14 +1166,250 @@ onMounted(() => {
 
                             <!-- TAB MANAGE QUESTIONS -->
                             <n-card v-if="activeTab === 'questions'">
-                                <div style="margin-bottom: 20px; display: flex; align-items: center; gap: 15px;">
-                                    <strong>Chọn Mã Đề Thi:</strong>
-                                    <select v-model="selectedTestId" @change="fetchData" style="padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; width: 320px;">
-                                        <option v-for="t in tests" :key="t._id" :value="t._id">{{ t.test_code }} - {{ t.name }}</option>
-                                    </select>
+                                <div style="margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 15px;">
+                                    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                                        <strong>Chọn Mã Đề Thi:</strong>
+                                        <select v-model="selectedTestId" @change="fetchQuestions" style="padding: 8px 14px; border-radius: 8px; border: 1px solid #cbd5e1; min-width: 320px; font-size: 14px; font-weight: 500;">
+                                            <option value="" disabled>-- Chọn mã đề --</option>
+                                            <option v-for="t in tests" :key="t._id" :value="t._id">
+                                                [{{ t.test_code }}] {{ t.name }} ({{ t.question_count || 0 }} câu)
+                                            </option>
+                                        </select>
+                                        <n-button size="small" type="primary" ghost @click="fetchQuestions" :loading="loading">🔄 Tải câu hỏi</n-button>
+                                    </div>
+                                    <div>
+                                        <n-button type="info" :disabled="!selectedTestId" @click="openCreateModal">+ Thêm Câu Hỏi Mới</n-button>
+                                    </div>
                                 </div>
-                                <n-data-table :columns="questionColumns" :data="questions" :loading="loading" :bordered="false" />
+
+                                <div v-if="currentSelectedTest" style="background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 8px; padding: 10px 16px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+                                    <div>
+                                        <span style="font-size: 14px; color: #3730a3;">
+                                            📌 Đang quản lý câu hỏi của Mã đề: <strong>{{ currentSelectedTest.test_code }} - {{ currentSelectedTest.name }}</strong>
+                                        </span>
+                                    </div>
+                                    <n-tag type="info" size="small">{{ questions.length }} câu hỏi</n-tag>
+                                </div>
+
+                                <div v-if="tests.length === 0" style="text-align:center; color:#94a3b8; padding: 40px;">
+                                    ⚠️ Chưa có mã đề nào. Hãy tạo mã đề trước trong tab "Quản lý Đề thi".
+                                </div>
+                                <div v-else-if="!selectedTestId" style="text-align:center; color:#94a3b8; padding: 40px;">
+                                    👉 Vui lòng chọn một mã đề từ danh sách bên trên để quản lý câu hỏi.
+                                </div>
+                                <div v-else-if="questions.length === 0 && !loading" style="text-align:center; color:#64748b; padding: 40px; background: #f8fafc; border-radius: 12px; border: 1px dashed #cbd5e1;">
+                                    <p style="font-size: 16px; font-weight: 600; margin-bottom: 8px;">Mã đề này chưa có câu hỏi nào!</p>
+                                    <p style="font-size: 14px; color: #94a3b8; margin-bottom: 16px;">Hãy bấm nút bên dưới để thêm câu hỏi đầu tiên.</p>
+                                    <n-button type="info" @click="openCreateModal">+ Thêm Câu Hỏi Ngay</n-button>
+                                </div>
+                                <n-data-table v-else :columns="questionColumns" :data="questions" :loading="loading" :bordered="false" />
                             </n-card>
+
+                            <!-- TAB CÀI ĐẶT HÌNH NỀN ĐĂNG NHẬP -->
+                            <div v-if="activeTab === 'wallpaper'" class="wallpaper-panel">
+                                <!-- Hidden input để chọn file ảnh từ máy tính -->
+                                <input 
+                                    type="file" 
+                                    ref="bgFileInputRef" 
+                                    accept="image/png, image/jpeg, image/jpg, image/webp, image/gif" 
+                                    style="display: none" 
+                                    @change="onBgFileSelected" 
+                                />
+
+                                <n-alert v-if="bgSuccessMsg" type="success" closable @close="bgSuccessMsg = ''" style="margin-bottom: 20px;">
+                                    {{ bgSuccessMsg }}
+                                </n-alert>
+
+                                <n-grid cols="12" item-responsive responsive="screen" x-gap="20" y-gap="20">
+                                    <!-- Cột trái: Các công cụ nạp và tùy chỉnh ảnh -->
+                                    <n-gi span="12 l:7">
+                                        <n-card title="⚙️ Tùy Chỉnh Hình Nền Màn Hình Đăng Nhập" style="border-radius: 12px;">
+                                            <p style="color: #64748b; font-size: 14px; margin-bottom: 16px;">
+                                                Hình nền được cài đặt tại đây sẽ áp dụng cho toàn bộ sinh viên khi truy cập trang đăng nhập làm bài thi.
+                                            </p>
+
+                                            <!-- Trạng thái hiện tại -->
+                                            <div style="background: #f1f5f9; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+                                                <div>
+                                                    <span style="font-size: 13px; color: #475569;">Trạng thái nền đăng nhập hiện tại:</span>
+                                                    <div style="font-weight: 600; margin-top: 2px;">
+                                                        <span v-if="currentBgImage" style="color: #16a34a;">
+                                                            🟢 Đang kích hoạt hình nền tùy chỉnh
+                                                        </span>
+                                                        <span v-else style="color: #6366f1;">
+                                                            🟣 Đang dùng màu chuyển động gradient mặc định
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <a href="/" target="_blank" style="text-decoration: none;">
+                                                    <n-button size="small" type="info" ghost>
+                                                        🔗 Xem trang sinh viên
+                                                    </n-button>
+                                                </a>
+                                            </div>
+
+                                            <n-tabs v-model:value="bgTab" type="line" animated>
+                                                <!-- Tab 1: Tải ảnh từ máy tính -->
+                                                <n-tab-pane name="upload" tab="📁 Tải ảnh từ máy tính">
+                                                    <div 
+                                                        class="admin-upload-dropzone" 
+                                                        @click="triggerBgFileInput"
+                                                        @dragover.prevent
+                                                        @drop="onBgFileDrop"
+                                                    >
+                                                        <div v-if="isProcessingBgImage" style="padding: 24px; text-align: center;">
+                                                            <n-spin size="large" stroke="#6366f1" />
+                                                            <p style="margin-top: 12px; color: #64748b; font-weight: 500;">Đang xử lý và tối ưu hóa kích thước ảnh...</p>
+                                                        </div>
+                                                        <div v-else class="dropzone-body">
+                                                            <div class="dropzone-icon-box">
+                                                                <span style="font-size: 32px;">📷</span>
+                                                            </div>
+                                                            <h4 style="margin: 8px 0 4px 0; font-size: 16px; color: #1e293b;">
+                                                                Nhấp vào đây để chọn ảnh từ máy tính của bạn
+                                                            </h4>
+                                                            <p style="color: #64748b; font-size: 13px; margin: 0 0 12px 0;">
+                                                                Hoặc kéo và thả file ảnh vào khung này
+                                                            </p>
+                                                            <n-button type="primary" size="medium" style="border-radius: 8px;">
+                                                                Chọn file ảnh
+                                                            </n-button>
+                                                            <p style="font-size: 12px; color: #94a3b8; margin-top: 12px;">
+                                                                Hỗ trợ PNG, JPG, JPEG, WEBP. Ảnh sẽ được tự động tối ưu hóa chuẩn Full HD hiển thị mượt mà.
+                                                            </p>
+                                                            <div v-if="uploadingBgFileName" class="admin-badge-success">
+                                                                ✅ Đã nạp file: <strong>{{ uploadingBgFileName }}</strong>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </n-tab-pane>
+
+                                                <!-- Tab 2: Nhập liên kết ảnh URL -->
+                                                <n-tab-pane name="url" tab="🔗 Dán link ảnh (URL)">
+                                                    <div style="padding: 16px 0;">
+                                                        <label style="font-size: 14px; font-weight: 600; color: #334155; display: block; margin-bottom: 8px;">
+                                                            Đường dẫn hình ảnh trực tuyến:
+                                                        </label>
+                                                        <div style="display: flex; gap: 10px;">
+                                                            <n-input 
+                                                                v-model:value="inputBgUrl" 
+                                                                placeholder="https://example.com/anh-truong-dai-hoc.jpg" 
+                                                                size="large"
+                                                                @keydown.enter="applyBgUrlImage"
+                                                            />
+                                                            <n-button type="primary" size="large" @click="applyBgUrlImage">
+                                                                Nạp ảnh
+                                                            </n-button>
+                                                        </div>
+                                                        <span style="display: block; font-size: 12px; color: #94a3b8; margin-top: 6px;">
+                                                            Nhập liên kết trực tiếp tới file ảnh (.jpg, .png, .webp).
+                                                        </span>
+                                                    </div>
+                                                </n-tab-pane>
+
+                                                <!-- Tab 3: Bộ sưu tập mẫu có sẵn -->
+                                                <n-tab-pane name="presets" tab="✨ Bộ sưu tập mẫu">
+                                                    <div class="admin-presets-grid">
+                                                        <div 
+                                                            v-for="(preset, idx) in presetWallpapers" 
+                                                            :key="idx" 
+                                                            class="admin-preset-item"
+                                                            :class="{ active: tempBgImage === preset.url }"
+                                                            @click="selectBgPreset(preset.url, preset.name)"
+                                                        >
+                                                            <img :src="preset.url" :alt="preset.name" loading="lazy" />
+                                                            <div class="admin-preset-name">{{ preset.name }}</div>
+                                                        </div>
+                                                    </div>
+                                                </n-tab-pane>
+                                            </n-tabs>
+
+                                            <!-- Thanh trượt điều chỉnh độ sáng tối và độ mờ -->
+                                            <div v-if="tempBgImage" style="margin-top: 20px; background: #f8fafc; border-radius: 10px; padding: 16px; border: 1px solid #e2e8f0;">
+                                                <div style="margin-bottom: 16px;">
+                                                    <div style="display: flex; justify-content: space-between; font-size: 14px; font-weight: 600; color: #1e293b; margin-bottom: 4px;">
+                                                        <span>🌑 Độ tối lớp phủ (Overlay Dim):</span>
+                                                        <span style="color: #6366f1;">{{ tempBgDim }}%</span>
+                                                    </div>
+                                                    <n-slider v-model:value="tempBgDim" :min="0" :max="90" :step="5" />
+                                                    <span style="font-size: 12px; color: #64748b;">
+                                                        Tăng độ tối nếu ảnh nền có nhiều chi tiết sáng giúp khung đăng nhập và chữ luôn rõ nét.
+                                                    </span>
+                                                </div>
+
+                                                <div>
+                                                    <div style="display: flex; justify-content: space-between; font-size: 14px; font-weight: 600; color: #1e293b; margin-bottom: 4px;">
+                                                        <span>🌫️ Độ mờ hậu cảnh (Blur Effect):</span>
+                                                        <span style="color: #6366f1;">{{ tempBgBlur }}px</span>
+                                                    </div>
+                                                    <n-slider v-model:value="tempBgBlur" :min="0" :max="20" :step="1" />
+                                                    <span style="font-size: 12px; color: #64748b;">
+                                                        Làm mờ hậu cảnh tạo hiệu ứng kính mờ (Glassmorphism) chuyên nghiệp.
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            <!-- Các nút hành động lưu / khôi phục -->
+                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 24px; padding-top: 16px; border-top: 1px solid #e2e8f0;">
+                                                <n-button secondary type="warning" @click="resetBgDefault">
+                                                    🔄 Đặt lại mặc định (Gradient)
+                                                </n-button>
+                                                <div style="display: flex; gap: 12px;">
+                                                    <n-button type="primary" size="large" :loading="isSavingBg" @click="saveBgSettings">
+                                                        💾 Áp Dụng & Lưu Cấu Hình
+                                                    </n-button>
+                                                </div>
+                                            </div>
+                                        </n-card>
+                                    </n-gi>
+
+                                    <!-- Cột phải: Live Preview màn hình đăng nhập -->
+                                    <n-gi span="12 l:5">
+                                        <n-card title="👁️ Xem Trước Màn Hình Đăng Nhập Sinh Viên" style="border-radius: 12px;">
+                                            <p style="color: #64748b; font-size: 13px; margin-bottom: 12px;">
+                                                Mô phỏng trực tiếp giao diện sinh viên sẽ nhìn thấy:
+                                            </p>
+
+                                            <div class="admin-preview-monitor">
+                                                <!-- Ảnh nền mô phỏng -->
+                                                <div 
+                                                    v-if="tempBgImage" 
+                                                    class="monitor-bg" 
+                                                    :style="{
+                                                        backgroundImage: `url(${tempBgImage})`,
+                                                        filter: `blur(${tempBgBlur}px)`
+                                                    }"
+                                                ></div>
+                                                <div 
+                                                    v-else 
+                                                    class="monitor-bg-gradient"
+                                                ></div>
+
+                                                <!-- Lớp phủ tối -->
+                                                <div 
+                                                    v-if="tempBgImage" 
+                                                    class="monitor-overlay"
+                                                    :style="{ backgroundColor: `rgba(15, 23, 42, ${tempBgDim / 100})` }"
+                                                ></div>
+
+                                                <!-- Thẻ đăng nhập mô phỏng -->
+                                                <div class="monitor-login-card">
+                                                    <div class="monitor-card-title">Đăng Nhập Thi Trắc Nghiệm</div>
+                                                    <div class="monitor-card-sub">HUNRE Microservices (SOA)</div>
+                                                    <div class="monitor-input-mock">Mã đề thi (VD: SOA_01)</div>
+                                                    <div class="monitor-input-mock">Email sinh viên</div>
+                                                    <div class="monitor-input-mock">Mật khẩu (MSV)</div>
+                                                    <div class="monitor-btn-mock">Bắt đầu làm bài</div>
+                                                </div>
+                                            </div>
+
+                                            <div style="margin-top: 16px; font-size: 13px; color: #64748b; text-align: center;">
+                                                💡 Khi ấn <strong>"Áp Dụng & Lưu Cấu Hình"</strong>, hình nền sẽ được đồng bộ ngay tức thì đến máy chủ và trang đăng nhập.
+                                            </div>
+                                        </n-card>
+                                    </n-gi>
+                                </n-grid>
+                            </div>
                         </n-layout-content>
                     </n-layout>
                 </n-layout>
@@ -935,21 +1498,35 @@ onMounted(() => {
 
                 <!-- Modal Thêm/Sửa Câu Hỏi -->
                 <n-modal v-model:show="showQuestionModal" preset="card" style="width: 650px; border-radius: 16px;" :title="isEditing ? 'Sửa Câu Hỏi' : 'Thêm Câu Hỏi Mới'">
+                    <div v-if="currentSelectedTest" style="margin-bottom: 14px; padding: 8px 12px; background: #eff6ff; border-radius: 8px; border: 1px solid #bfdbfe; font-size: 13.5px; color: #1e40af;">
+                        Mã đề: <strong>{{ currentSelectedTest.test_code }}</strong> ({{ currentSelectedTest.name }})
+                    </div>
                     <n-space vertical size="large">
                         <div>
-                            <label style="font-weight: bold;">Nội dung câu hỏi:</label>
-                            <n-input v-model:value="questionForm.text" type="textarea" placeholder="Nhập nội dung câu hỏi..." />
+                            <label style="font-weight: bold;">Nội dung câu hỏi: <span style="color: #ef4444;">*</span></label>
+                            <n-input v-model:value="questionForm.text" type="textarea" :rows="3" placeholder="Nhập nội dung câu hỏi..." />
                         </div>
                         <div>
-                            <label style="font-weight: bold;">Các đáp án (Chọn 1 đáp án đúng):</label>
+                            <label style="font-weight: bold; display: flex; justify-content: space-between;">
+                                <span>Các đáp án lựa chọn (Tích chọn 1 đáp án đúng): <span style="color: #ef4444;">*</span></span>
+                            </label>
                             <div v-for="(ans, index) in questionForm.answers" :key="index" style="display: flex; align-items: center; gap: 10px; margin-top: 10px;">
-                                <input type="radio" :name="'correct_answer'" :checked="ans.is_correct" @change="setCorrectAnswer(index)" style="width: 20px; height: 20px; cursor: pointer;" />
-                                <n-input v-model:value="ans.text" :placeholder="`Đáp án ${String.fromCharCode(65 + index)}`" style="flex: 1;" />
+                                <input 
+                                    type="radio" 
+                                    name="correct_answer_radio" 
+                                    :checked="ans.is_correct" 
+                                    @change="setCorrectAnswer(index)" 
+                                    style="width: 20px; height: 20px; cursor: pointer; accent-color: #10b981;" 
+                                    title="Chọn làm đáp án đúng"
+                                />
+                                <span style="font-weight: bold; width: 22px;">{{ String.fromCharCode(65 + index) }}.</span>
+                                <n-input v-model:value="ans.text" :placeholder="`Nhập nội dung đáp án ${String.fromCharCode(65 + index)}...`" style="flex: 1;" />
+                                <n-tag v-if="ans.is_correct" type="success" size="small" style="font-weight: bold;">Đúng</n-tag>
                             </div>
                         </div>
                         <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
                             <n-button @click="showQuestionModal = false">Hủy</n-button>
-                            <n-button type="primary" @click="saveQuestion" :loading="loading">Lưu</n-button>
+                            <n-button type="primary" @click="saveQuestion" :loading="loading">Lưu Câu Hỏi</n-button>
                         </div>
                     </n-space>
                 </n-modal>
@@ -1157,5 +1734,170 @@ onMounted(() => {
 .fade-enter-from,
 .fade-leave-to {
     opacity: 0;
+}
+
+/* Wallpaper Panel Styles */
+.admin-upload-dropzone {
+    border: 2px dashed #818cf8;
+    background: #f8fafc;
+    border-radius: 12px;
+    padding: 32px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    margin: 10px 0;
+}
+
+.admin-upload-dropzone:hover {
+    border-color: #4f46e5;
+    background: #eef2ff;
+    transform: translateY(-2px);
+}
+
+.dropzone-icon-box {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: #e0e7ff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 8px;
+}
+
+.admin-badge-success {
+    margin-top: 14px;
+    display: inline-block;
+    background: #dcfce7;
+    color: #15803d;
+    border: 1px solid #86efac;
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: 13px;
+}
+
+.admin-presets-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin: 12px 0;
+}
+
+.admin-preset-item {
+    position: relative;
+    height: 110px;
+    border-radius: 10px;
+    overflow: hidden;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: all 0.25s ease;
+}
+
+.admin-preset-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.3s ease;
+}
+
+.admin-preset-item:hover img {
+    transform: scale(1.08);
+}
+
+.admin-preset-item.active {
+    border-color: #6366f1;
+    box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
+}
+
+.admin-preset-name {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(to top, rgba(0,0,0,0.85), transparent);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 10px;
+}
+
+/* Monitor Preview */
+.admin-preview-monitor {
+    position: relative;
+    height: 380px;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid #cbd5e1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+}
+
+.monitor-bg {
+    position: absolute;
+    inset: -6px;
+    background-size: cover;
+    background-position: center;
+    z-index: 1;
+}
+
+.monitor-bg-gradient {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(-45deg, #1e1b4b, #312e81, #0f172a, #1e293b);
+    background-size: 400% 400%;
+    z-index: 1;
+}
+
+.monitor-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+}
+
+.monitor-login-card {
+    position: relative;
+    z-index: 3;
+    background: rgba(255, 255, 255, 0.14);
+    backdrop-filter: blur(12px);
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    padding: 20px 24px;
+    width: 250px;
+    text-align: center;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.37);
+}
+
+.monitor-card-title {
+    color: #fff;
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.monitor-card-sub {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 10px;
+    margin-bottom: 12px;
+}
+
+.monitor-input-mock {
+    background: rgba(255, 255, 255, 0.92);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 9px;
+    color: #94a3b8;
+    margin-bottom: 8px;
+    text-align: left;
+}
+
+.monitor-btn-mock {
+    background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+    color: #fff;
+    font-size: 11px;
+    font-weight: bold;
+    padding: 7px 0;
+    border-radius: 6px;
+    margin-top: 6px;
 }
 </style>

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from "vue"
+import { ref, computed, onMounted } from "vue"
 import axios from "axios";
 import ExamsHeader from '@/components/ExamsHeader.vue';
 import Question from "../components/Question.vue";
@@ -35,6 +35,36 @@ const studentHistoryList = ref([])
 
 // Cổng API Gateway 8000
 const API_BASE = "http://localhost:8000"
+
+// Quản lý hình nền đăng nhập (được cấu hình bởi Admin)
+const currentBgImage = ref(localStorage.getItem("quiz_app_bg_image") || "")
+const currentBgDim = ref(Number(localStorage.getItem("quiz_app_bg_dim")) || 45)
+const currentBgBlur = ref(Number(localStorage.getItem("quiz_app_bg_blur")) || 0)
+
+onMounted(async () => {
+    // 1. Tải cấu hình từ localStorage để hiển thị tức thì
+    const localBg = localStorage.getItem("quiz_app_bg_image")
+    if (localBg) {
+        currentBgImage.value = localBg
+        currentBgDim.value = Number(localStorage.getItem("quiz_app_bg_dim")) || 45
+        currentBgBlur.value = Number(localStorage.getItem("quiz_app_bg_blur")) || 0
+    } else {
+        // 2. Nếu localStorage chưa có, đồng bộ từ máy chủ backend
+        try {
+            const res = await axios.get(`${API_BASE}/task_service/settings/background`)
+            if (res.data?.status === 'success' && res.data?.data?.image) {
+                currentBgImage.value = res.data.data.image
+                currentBgDim.value = res.data.data.dim ?? 45
+                currentBgBlur.value = res.data.data.blur ?? 0
+                localStorage.setItem("quiz_app_bg_image", currentBgImage.value)
+                localStorage.setItem("quiz_app_bg_dim", String(currentBgDim.value))
+                localStorage.setItem("quiz_app_bg_blur", String(currentBgBlur.value))
+            }
+        } catch (e) {
+            // Backend chưa sẵn sàng, giữ nguyên
+        }
+    }
+})
 
 const answeredCount = computed(() => studentAnswers.value.length)
 
@@ -182,16 +212,40 @@ async function fetchStudentHistory() {
 </script>
 
 <template>
-    <div class="main-wrapper">
+    <div class="main-wrapper" :class="{ 'has-custom-bg': !show && !showResult && currentBgImage }">
+        <!-- Lớp hiển thị ảnh nền tùy chỉnh do Admin cài đặt -->
+        <div 
+            v-if="!show && !showResult && currentBgImage" 
+            class="custom-bg-image" 
+            :style="{
+                backgroundImage: `url(${currentBgImage})`,
+                filter: `blur(${currentBgBlur}px)`
+            }"
+        ></div>
+        <!-- Lớp phủ màu tối đảm bảo chữ và thẻ đăng nhập luôn rõ nét -->
+        <div 
+            v-if="!show && !showResult && currentBgImage" 
+            class="custom-bg-overlay"
+            :style="{
+                backgroundColor: `rgba(15, 23, 42, ${currentBgDim / 100})`
+            }"
+        ></div>
+
         <n-space vertical :size="12" class="alert-container" v-if="alert">
             <n-alert title="Thông báo" type="error" closable @close="alert = false">
                 {{ messageAlert }}
             </n-alert>
         </n-space>
 
-        <!-- Nút Admin & Lịch sử -->
+        <!-- Nút Tra cứu lịch sử & Admin trên thanh công cụ -->
         <div class="top-nav-buttons" v-if="!show && !showResult">
-            <n-button type="info" ghost size="medium" @click="fetchStudentHistory" style="margin-right: 10px; color: #fff; border-color: rgba(255,255,255,0.6);">
+            <n-button 
+                type="info" 
+                ghost 
+                size="medium" 
+                @click="fetchStudentHistory" 
+                style="margin-right: 10px; color: #fff; border-color: rgba(255,255,255,0.6);"
+            >
                 📜 Tra cứu lịch sử thi
             </n-button>
             <router-link to="/admin" class="admin-link">
@@ -310,6 +364,36 @@ async function fetchStudentHistory() {
     100% { background-position: 0% 50%; }
 }
 
+/* Lớp hình nền tùy chỉnh */
+.custom-bg-image {
+    position: fixed;
+    top: -10px;
+    left: -10px;
+    right: -10px;
+    bottom: -10px;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    z-index: 1;
+    transition: filter 0.3s ease, background-image 0.5s ease;
+}
+
+.custom-bg-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 2;
+    pointer-events: none;
+    transition: background-color 0.3s ease;
+}
+
+.main-wrapper.has-custom-bg {
+    animation: none;
+    background: #0f172a;
+}
+
 .alert-container {
     position: fixed;
     top: 20px;
@@ -338,6 +422,8 @@ async function fetchStudentHistory() {
     display: flex;
     align-items: center;
     justify-content: center;
+    position: relative;
+    z-index: 10;
 }
 
 .glass-card {
@@ -415,6 +501,8 @@ async function fetchStudentHistory() {
 .exam-view {
     background-color: #f8fafc;
     min-height: 100vh;
+    position: relative;
+    z-index: 10;
 }
 
 .sticky-header {
