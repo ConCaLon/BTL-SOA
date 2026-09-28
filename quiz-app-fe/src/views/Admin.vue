@@ -1027,6 +1027,109 @@ onMounted(() => {
     fetchBgSettings()
     if (isAuthenticated.value) fetchData()
 })
+
+// ================= REPORT SERVICE =================
+const reportStats = ref({})
+const reportExporting = ref(false)
+const reportExportingTestId = ref(null)
+
+const reportByTestColumns = [
+    { title: 'Mã đề', key: 'test_code' },
+    { title: 'Tên bài thi', key: 'test_name', ellipsis: { tooltip: true } },
+    { title: 'Tổng lượt nộp', key: 'submissions' },
+    {
+        title: 'Số lượt Đạt',
+        key: 'pass',
+        render: (row) => h(NTag, { type: 'success', size: 'small' }, { default: () => row.pass })
+    },
+    {
+        title: 'Số lượt Chưa đạt',
+        key: 'fail',
+        render: (row) => h(NTag, { type: 'error', size: 'small' }, { default: () => row.fail })
+    },
+    {
+        title: 'Tỉ lệ Đạt',
+        key: 'pass_rate',
+        render: (row) => `${row.pass_rate}%`
+    },
+    {
+        title: 'Điểm TB',
+        key: 'average_score',
+        render: (row) => `${row.average_score}/10`
+    },
+    {
+        title: 'Xuất Excel',
+        key: 'export',
+        render: (row) => h(NButton, {
+            size: 'small',
+            type: 'primary',
+            ghost: true,
+            loading: reportExportingTestId.value === row.test_id,
+            onClick: () => exportByTest(row.test_id, row.test_code)
+        }, { default: () => '📥 Xuất' })
+    }
+]
+
+async function fetchReportStats() {
+    try {
+        const res = await axios.get(`${API_BASE}/task_service/report/stats`)
+        if (res.data?.status === 'success') {
+            reportStats.value = res.data.data || {}
+        }
+    } catch (e) {
+        console.error('Lỗi lấy thống kê báo cáo:', e)
+    }
+}
+
+async function exportAllResults() {
+    reportExporting.value = true
+    try {
+        const response = await axios.get(`${API_BASE}/task_service/report/export/all`, {
+            responseType: 'blob'
+        })
+        const url = window.URL.createObjectURL(new Blob([response.data]))
+        const link = document.createElement('a')
+        link.href = url
+        const fileName = response.headers['content-disposition']
+            ?.split('filename*=UTF-8\'\'')[1]
+            || `BangDiem_TongHop_${new Date().toISOString().slice(0,10)}.xlsx`
+        link.setAttribute('download', decodeURIComponent(fileName))
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        window.URL.revokeObjectURL(url)
+    } catch (e) {
+        console.error('Lỗi xuất báo cáo:', e)
+        alert('Lỗi xuất báo cáo! Kiểm tra Report-Service đang chạy trên port 8006.')
+    } finally {
+        reportExporting.value = false
+    }
+}
+
+async function exportByTest(testId, testCode) {
+    reportExportingTestId.value = testId
+    try {
+        const response = await axios.get(`${API_BASE}/task_service/report/export/by_test/${testId}`, {
+            responseType: 'blob'
+        })
+        const url = window.URL.createObjectURL(new Blob([response.data]))
+        const link = document.createElement('a')
+        link.href = url
+        const fileName = response.headers['content-disposition']
+            ?.split('filename*=UTF-8\'\'')[1]
+            || `BangDiem_${testCode}_${new Date().toISOString().slice(0,10)}.xlsx`
+        link.setAttribute('download', decodeURIComponent(fileName))
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        window.URL.revokeObjectURL(url)
+    } catch (e) {
+        console.error('Lỗi xuất báo cáo theo đề:', e)
+        alert(`Lỗi xuất bảng điểm đề ${testCode}!`)
+    } finally {
+        reportExportingTestId.value = null
+    }
+}
 </script>
 
 <template>
@@ -1067,12 +1170,13 @@ onMounted(() => {
                         <div class="logo">
                             <h2>🛡️ Admin Panel</h2>
                         </div>
-                        <n-menu :value="activeTab" @update:value="async (val) => { activeTab = val; if (val === 'questions') { await fetchData(); await fetchQuestions(); } else if (val === 'wallpaper') { await fetchBgSettings(); } else { fetchData(); } }" :options="[
+                        <n-menu :value="activeTab" @update:value="async (val) => { activeTab = val; if (val === 'questions') { await fetchData(); await fetchQuestions(); } else if (val === 'wallpaper') { await fetchBgSettings(); } else if (val === 'report') { await fetchReportStats(); } else { fetchData(); } }" :options="[
                             { label: '📊 Tổng quan Dashboard', key: 'dashboard' },
                             { label: '📝 Quản lý Đề thi', key: 'tests' },
                             { label: '❓ Ngân hàng câu hỏi', key: 'questions' },
                             { label: '🏆 Kết quả thi', key: 'results' },
                             { label: '🎓 Danh sách sinh viên', key: 'students' },
+                            { label: '📈 Báo cáo & Xuất Excel', key: 'report' },
                             { label: '🖼️ Cài đặt hình nền', key: 'wallpaper' }
                         ]" />
                         <div style="padding: 20px; position: absolute; bottom: 0;">
@@ -1090,12 +1194,14 @@ onMounted(() => {
                                 <span v-else-if="activeTab === 'results'">🏆 Quản lý Kết quả thi</span>
                                 <span v-else-if="activeTab === 'students'">🎓 Quản lý Sinh viên & Tài khoản</span>
                                 <span v-else-if="activeTab === 'wallpaper'">🖼️ Cài Đặt Hình Nền Trang Đăng Nhập</span>
+                                <span v-else-if="activeTab === 'report'">📈 Báo cáo & Xuất Bảng Điểm Excel</span>
                                 <span v-else>❓ Ngân hàng Câu hỏi</span>
                             </h2>
                             <div>
                                 <n-button v-if="activeTab === 'tests'" @click="openCreateTestModal" type="info" style="margin-right: 10px;">+ Thêm Mã Đề</n-button>
                                 <n-button v-if="activeTab === 'students'" @click="openCreateStudentModal" type="info" style="margin-right: 10px;">+ Thêm Sinh Viên</n-button>
                                 <n-button v-if="activeTab === 'questions'" @click="openCreateModal" type="info" style="margin-right: 10px;">+ Thêm Câu Hỏi</n-button>
+                                <n-button v-if="activeTab === 'report'" @click="exportAllResults" type="success" style="margin-right: 10px;" :loading="reportExporting">📥 Xuất tất cả Excel</n-button>
                                 <n-button @click="fetchData" :loading="loading" type="primary" style="margin-right: 10px;">Làm mới</n-button>
                                 <n-button @click="isAuthenticated = false" type="error" ghost>Đăng xuất</n-button>
                             </div>
@@ -1130,6 +1236,72 @@ onMounted(() => {
 
                                 <n-card title="🏆 Lượt bài nộp mới nhất" style="margin-top: 24px;">
                                     <n-data-table :columns="resultColumns" :data="results.slice(0, 5)" :bordered="false" />
+                                </n-card>
+                            </div>
+
+                            <!-- TAB BÁO CÁO & XUẤT EXCEL -->
+                            <div v-if="activeTab === 'report'">
+                                <!-- Thống kê nhanh -->
+                                <n-grid cols="4" item-responsive responsive="screen" x-gap="16" y-gap="16" style="margin-bottom: 24px;">
+                                    <n-gi span="4 m:2 l:1">
+                                        <n-card class="stat-card border-blue">
+                                            <n-statistic label="📑 Tổng lượt nộp" :value="reportStats.total_submissions ?? '—'" />
+                                        </n-card>
+                                    </n-gi>
+                                    <n-gi span="4 m:2 l:1">
+                                        <n-card class="stat-card border-emerald">
+                                            <n-statistic label="✅ Số lượt Đạt" :value="reportStats.pass_count ?? '—'" />
+                                        </n-card>
+                                    </n-gi>
+                                    <n-gi span="4 m:2 l:1">
+                                        <n-card class="stat-card border-red">
+                                            <n-statistic label="❌ Số lượt Chưa đạt" :value="reportStats.fail_count ?? '—'" />
+                                        </n-card>
+                                    </n-gi>
+                                    <n-gi span="4 m:2 l:1">
+                                        <n-card class="stat-card border-purple">
+                                            <n-statistic label="⭐ Điểm TB" :value="reportStats.average_score !== undefined ? `${reportStats.average_score}/10` : '—'" />
+                                        </n-card>
+                                    </n-gi>
+                                </n-grid>
+
+                                <!-- Xuất báo cáo tổng hợp -->
+                                <n-card title="📥 Xuất Báo Cáo Excel" style="margin-bottom: 24px;">
+                                    <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: center; padding: 8px 0;">
+                                        <div style="flex: 1; min-width: 280px;">
+                                            <div style="font-size: 15px; font-weight: 600; margin-bottom: 4px;">📊 Bảng điểm tổng hợp tất cả bài thi</div>
+                                            <div style="font-size: 13px; color: #64748b;">Xuất toàn bộ kết quả thi của tất cả sinh viên, kèm thống kê pass/fail, điểm TB...</div>
+                                        </div>
+                                        <n-button type="success" :loading="reportExporting" @click="exportAllResults" size="large">
+                                            📥 Xuất Excel Tổng hợp
+                                        </n-button>
+                                    </div>
+                                </n-card>
+
+                                <!-- Xuất theo từng bài thi -->
+                                <n-card title="📝 Xuất Bảng Điểm Theo Đề Thi" style="margin-bottom: 24px;">
+                                    <div v-if="tests.length === 0" style="color:#94a3b8; padding: 20px; text-align: center;">Chưa có đề thi nào.</div>
+                                    <div v-else style="display: flex; flex-direction: column; gap: 12px;">
+                                        <div v-for="t in tests" :key="t._id" class="report-row">
+                                            <div style="flex: 1;">
+                                                <n-tag type="info" size="small" style="margin-right: 8px;">{{ t.test_code }}</n-tag>
+                                                <span style="font-weight: 500;">{{ t.name }}</span>
+                                                <span style="color: #64748b; font-size: 13px; margin-left: 8px;">({{ t.question_count || 0 }} câu hỏi)</span>
+                                            </div>
+                                            <n-button size="small" type="primary" ghost :loading="reportExportingTestId === t._id" @click="exportByTest(t._id, t.test_code)">
+                                                📥 Xuất Excel
+                                            </n-button>
+                                        </div>
+                                    </div>
+                                </n-card>
+
+                                <!-- Thống kê từng đề -->
+                                <n-card title="📈 Thống kê Chi tiết theo Đề Thi" v-if="reportStats.by_test && reportStats.by_test.length > 0">
+                                    <n-data-table
+                                        :columns="reportByTestColumns"
+                                        :data="reportStats.by_test"
+                                        :bordered="false"
+                                    />
                                 </n-card>
                             </div>
 
@@ -1899,5 +2071,26 @@ onMounted(() => {
     padding: 7px 0;
     border-radius: 6px;
     margin-top: 6px;
+}
+
+/* Report tab */
+.border-red {
+    border-left: 4px solid #ef4444 !important;
+}
+
+.report-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    transition: box-shadow 0.2s;
+}
+
+.report-row:hover {
+    box-shadow: 0 2px 10px rgba(99, 102, 241, 0.12);
+    border-color: #a5b4fc;
 }
 </style>

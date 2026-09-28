@@ -1,6 +1,6 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from schemas.task import StartTest, SubmitTest
-from constants.all import QUESTION_SERVICE_URL, TEST_SERVICE_URL, STUDENT_SERVICE_URL, AUTHEN_SERVICE_URL, NOTIFICATION_SERVICE_URL
+from constants.all import QUESTION_SERVICE_URL, TEST_SERVICE_URL, STUDENT_SERVICE_URL, AUTHEN_SERVICE_URL, NOTIFICATION_SERVICE_URL, REPORT_SERVICE_URL
 from configs.socket_manager import ConnectionManager
 import httpx
 import ssl
@@ -427,3 +427,69 @@ async def save_background_setting(data: dict):
     return {"status": "failed", "message": "Không thể lưu cấu hình ảnh nền"}
 
 
+# ==========================================
+# REPORT SERVICE (Xuất báo cáo / bảng điểm)
+# ==========================================
+
+@router.get("/report/export/all")
+async def report_export_all():
+    """Xuất toàn bộ bảng điểm tất cả bài thi ra Excel."""
+    async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+        response = await client.get(f"{REPORT_SERVICE_URL}/export/all")
+    if response.status_code == 200:
+        from fastapi.responses import StreamingResponse
+        import io
+        filename = response.headers.get("content-disposition", "attachment; filename=report.xlsx")
+        return StreamingResponse(
+            io.BytesIO(response.content),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": filename}
+        )
+    return {"status": "failed", "message": "Lỗi xuất báo cáo tổng hợp"}
+
+
+@router.get("/report/export/by_test/{test_id}")
+async def report_export_by_test(test_id: str):
+    """Xuất bảng điểm của một bài thi cụ thể (theo test_id)."""
+    async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+        response = await client.get(f"{REPORT_SERVICE_URL}/export/by_test/{test_id}")
+    if response.status_code == 200:
+        from fastapi.responses import StreamingResponse
+        import io
+        filename = response.headers.get("content-disposition", f"attachment; filename=BangDiem_{test_id}.xlsx")
+        return StreamingResponse(
+            io.BytesIO(response.content),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": filename}
+        )
+    return {"status": "failed", "message": "Lỗi xuất báo cáo bài thi"}
+
+
+@router.get("/report/export/by_student/{student_code}")
+async def report_export_by_student(student_code: str):
+    """Xuất lịch sử thi của một sinh viên."""
+    async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+        response = await client.get(f"{REPORT_SERVICE_URL}/export/by_student/{student_code}")
+    if response.status_code == 200:
+        from fastapi.responses import StreamingResponse
+        import io
+        filename = response.headers.get("content-disposition", f"attachment; filename=LichSuThi_{student_code}.xlsx")
+        return StreamingResponse(
+            io.BytesIO(response.content),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": filename}
+        )
+    return {"status": "failed", "message": "Lỗi xuất lịch sử thi sinh viên"}
+
+
+@router.get("/report/stats")
+async def report_stats():
+    """Lấy thống kê tổng hợp (JSON) để hiển thị trên dashboard."""
+    async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+        try:
+            response = await client.get(f"{REPORT_SERVICE_URL}/stats")
+            if response.status_code == 200:
+                return response.json()
+        except Exception as e:
+            return {"status": "failed", "message": f"Lỗi kết nối Report Service: {str(e)}"}
+    return {"status": "failed", "message": "Lỗi lấy thống kê"}
