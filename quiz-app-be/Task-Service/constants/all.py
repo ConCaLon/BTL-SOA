@@ -11,3 +11,4 @@ TEST_SERVICE_URL = os.getenv("TEST_SERVICE_URL", "http://127.0.0.1:8002/test_ser
 QUESTION_SERVICE_URL = os.getenv("QUESTION_SERVICE_URL", "http://127.0.0.1:8002/question_service")
 AUTHEN_SERVICE_URL = os.getenv("AUTHEN_SERVICE_URL", "http://127.0.0.1:8001/authen_service")
 NOTIFICATION_SERVICE_URL = os.getenv("NOTIFICATION_SERVICE_URL", "http://127.0.0.1:8005/notification_service")
+REPORT_SERVICE_URL = os.getenv("REPORT_SERVICE_URL", "http://127.0.0.1:8006/report_service")
