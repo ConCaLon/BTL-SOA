@@ -3,6 +3,11 @@ import { ref, onMounted, computed, h } from 'vue'
 import { NButton, NPopconfirm, NSpace, NTag, NCard, NGrid, NGi, NStatistic, NInput } from 'naive-ui'
 import axios from 'axios'
 import * as XLSX from 'xlsx'
+import { Eye } from '@lucide/vue'
+import { Bar } from 'vue-chartjs'
+import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend } from 'chart.js'
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
 // Cổng API Gateway 8000
 const API_BASE = "http://localhost:8000"
@@ -41,6 +46,32 @@ const studentSearchQuery = ref('')
 const showStudentHistoryModal = ref(false)
 const selectedStudentCode = ref('')
 const studentHistoryData = ref([])
+
+// Submission Detail Modal
+const showSubmissionDetailModal = ref(false)
+const selectedSubmission = ref(null)
+
+// Test Filter cho bảng kết quả
+const selectedTestFilter = ref(null)
+
+const testFilterOptions = computed(() => {
+    const uniqueTests = new Map()
+    results.value.forEach(r => {
+        if (r.test_id && !uniqueTests.has(r.test_id)) {
+            uniqueTests.set(r.test_id, r.test_title || r.test_id)
+        }
+    })
+    const options = [{ label: 'Tất cả bài thi', value: null }]
+    uniqueTests.forEach((title, id) => {
+        options.push({ label: title, value: id })
+    })
+    return options
+})
+
+function openSubmissionDetail(row) {
+    selectedSubmission.value = row
+    showSubmissionDetailModal.value = true
+}
 
 // CRUD Test state
 const showTestModal = ref(false)
@@ -97,6 +128,64 @@ const averageScore = computed(() => {
     return (sum / results.value.length).toFixed(2)
 })
 
+// Biểu đồ phổ điểm
+const scoreDistributionData = computed(() => {
+    let weak = 0, avg = 0, good = 0, excellent = 0
+    results.value.forEach(r => {
+        const s = r.score || 0
+        if (s < 4) weak++
+        else if (s < 6.5) avg++
+        else if (s < 8) good++
+        else excellent++
+    })
+    return {
+        labels: ['Yếu (< 4.0)', 'Trung bình (4.0 - 6.4)', 'Khá (6.5 - 7.9)', 'Giỏi (8.0 - 10.0)'],
+        datasets: [{
+            label: 'Số lượt nộp',
+            data: [weak, avg, good, excellent],
+            backgroundColor: ['#ef4444', '#f59e0b', '#3b82f6', '#10b981'],
+            borderRadius: 8,
+            borderSkipped: false,
+            barPercentage: 0.6,
+            categoryPercentage: 0.7
+        }]
+    }
+})
+
+const scoreChartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+        legend: { display: false },
+        tooltip: {
+            backgroundColor: '#1e293b',
+            titleFont: { size: 13, weight: '600' },
+            bodyFont: { size: 13 },
+            padding: 10,
+            cornerRadius: 8,
+            callbacks: {
+                label: (ctx) => `  ${ctx.parsed.y} lượt nộp`
+            }
+        }
+    },
+    scales: {
+        x: {
+            grid: { display: false },
+            ticks: { color: '#64748b', font: { size: 12, weight: '500' } }
+        },
+        y: {
+            beginAtZero: true,
+            ticks: {
+                color: '#94a3b8',
+                font: { size: 12 },
+                stepSize: 1,
+                precision: 0
+            },
+            grid: { color: '#f1f5f9' }
+        }
+    }
+}
+
 // Computed Filtered Lists
 const filteredTests = computed(() => {
     if (!testSearchQuery.value) return tests.value
@@ -108,12 +197,24 @@ const filteredTests = computed(() => {
 })
 
 const filteredResults = computed(() => {
-    if (!resultSearchQuery.value) return results.value
-    const q = resultSearchQuery.value.toLowerCase()
-    return results.value.filter(r => 
-        (r.student_code && r.student_code.toLowerCase().includes(q)) ||
-        (r.test_id && r.test_id.toLowerCase().includes(q))
-    )
+    let data = results.value
+
+    // Lọc theo bài thi
+    if (selectedTestFilter.value) {
+        data = data.filter(r => r.test_id === selectedTestFilter.value)
+    }
+
+    // Lọc theo từ khóa tìm kiếm
+    if (resultSearchQuery.value) {
+        const q = resultSearchQuery.value.toLowerCase()
+        data = data.filter(r =>
+            (r.student_code && r.student_code.toLowerCase().includes(q)) ||
+            (r.student_name && r.student_name.toLowerCase().includes(q)) ||
+            (r.test_title && r.test_title.toLowerCase().includes(q))
+        )
+    }
+
+    return data
 })
 
 const filteredStudents = computed(() => {
@@ -196,18 +297,58 @@ const studentColumns = [
 ]
 
 const resultColumns = [
-    { title: 'Mã SV', key: 'student_code' },
-    { title: 'Bài Thi (ID)', key: 'test_id' },
-    { 
-        title: 'Điểm số', 
-        key: 'score', 
+    {
+        title: 'Sinh viên',
+        key: 'student_code',
+        render: (row) => h('div', {}, [
+            h('div', { style: 'font-weight: 600; color: #1e293b; line-height: 1.4;' }, row.student_name || 'N/A'),
+            h('div', { style: 'font-size: 12px; color: #94a3b8; margin-top: 1px;' }, row.student_code)
+        ])
+    },
+    {
+        title: 'Bài Thi',
+        key: 'test_title',
+        ellipsis: { tooltip: true },
+        render: (row) => row.test_title || row.test_id
+    },
+    {
+        title: 'Điểm số',
+        key: 'score',
+        width: 105,
         render: (row) => {
             const isPass = row.score >= 5
-            return h(NTag, { type: isPass ? 'success' : 'error' }, { default: () => `${row.score}/10` })
+            return h(NTag, {
+                type: isPass ? 'success' : 'error',
+                round: true,
+                style: 'font-weight: 700;'
+            }, { default: () => `${row.score}/10` })
         }
     },
-    { title: 'Số câu đúng', key: 'correct_count', render: (row) => `${row.correct_count}/${row.total_questions}` },
-    { title: 'Thời gian nộp', key: 'submitted_at', render: (row) => new Date(row.submitted_at).toLocaleString() }
+    {
+        title: 'Số câu đúng',
+        key: 'correct_answers',
+        width: 115,
+        render: (row) => `${row.correct_answers}/${row.total_questions}`
+    },
+    {
+        title: 'Thời gian nộp',
+        key: 'submitted_at',
+        width: 165
+    },
+    {
+        title: 'Thao tác',
+        key: 'actions',
+        width: 80,
+        render: (row) => h(NButton, {
+            size: 'small',
+            type: 'info',
+            ghost: true,
+            circle: true,
+            onClick: () => openSubmissionDetail(row)
+        }, {
+            default: () => h(Eye, { size: 16 })
+        })
+    }
 ]
 
 const questionColumns = [
@@ -1234,8 +1375,24 @@ async function exportByTest(testId, testCode) {
                                     </n-gi>
                                 </n-grid>
 
+                                <n-card title="📊 Phân bố phổ điểm sinh viên" style="margin-top: 24px;" v-if="results.length > 0">
+                                    <div style="height: 280px; position: relative;">
+                                        <Bar :data="scoreDistributionData" :options="scoreChartOptions" />
+                                    </div>
+                                </n-card>
+
                                 <n-card title="🏆 Lượt bài nộp mới nhất" style="margin-top: 24px;">
-                                    <n-data-table :columns="resultColumns" :data="results.slice(0, 5)" :bordered="false" />
+                                    <template #header-extra>
+                                        <n-select
+                                            v-model:value="selectedTestFilter"
+                                            :options="testFilterOptions"
+                                            placeholder="Lọc theo bài thi"
+                                            clearable
+                                            style="width: 260px;"
+                                            size="small"
+                                        />
+                                    </template>
+                                    <n-data-table :columns="resultColumns" :data="filteredResults.slice(0, 10)" :bordered="false" />
                                 </n-card>
                             </div>
 
@@ -1315,8 +1472,16 @@ async function exportByTest(testId, testCode) {
 
                             <!-- TAB MANAGE RESULTS -->
                             <n-card v-if="activeTab === 'results'">
-                                <div style="margin-bottom: 16px; width: 300px;">
-                                    <n-input v-model:value="resultSearchQuery" placeholder="🔍 Tìm kiếm MSV hoặc Mã đề..." clearable />
+                                <div style="margin-bottom: 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                    <n-input v-model:value="resultSearchQuery" placeholder="🔍 Tìm kiếm MSV, Họ tên SV hoặc Tên bài thi..." clearable style="width: 340px;" />
+                                    <n-select
+                                        v-model:value="selectedTestFilter"
+                                        :options="testFilterOptions"
+                                        placeholder="Lọc theo bài thi"
+                                        clearable
+                                        style="width: 280px;"
+                                    />
+                                    <span style="color: #64748b; font-size: 13px; margin-left: auto;">Tổng: {{ filteredResults.length }} lượt nộp</span>
                                 </div>
                                 <n-data-table :columns="resultColumns" :data="filteredResults" :loading="loading" :bordered="false" />
                             </n-card>
@@ -1720,6 +1885,52 @@ async function exportByTest(testId, testCode) {
                         </div>
                     </div>
                 </n-modal>
+
+                <!-- Modal xem chi tiết bài nộp -->
+                <n-modal v-model:show="showSubmissionDetailModal" preset="card" style="width: 520px; border-radius: 16px;" title="📋 Chi tiết Bài nộp">
+                    <div v-if="selectedSubmission" style="display: flex; flex-direction: column; gap: 16px;">
+                        <div style="display: flex; align-items: center; gap: 14px; padding: 16px; background: linear-gradient(135deg, #eef2ff 0%, #f0f9ff 100%); border-radius: 12px; border: 1px solid #c7d2fe;">
+                            <div style="width: 48px; height: 48px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #a855f7); display: flex; align-items: center; justify-content: center; color: white; font-size: 20px; font-weight: 800; flex-shrink: 0;">
+                                {{ (selectedSubmission.student_name || 'N')[0] }}
+                            </div>
+                            <div>
+                                <div style="font-size: 17px; font-weight: 700; color: #1e293b;">{{ selectedSubmission.student_name || 'N/A' }}</div>
+                                <div style="font-size: 13px; color: #64748b; margin-top: 2px;">MSV: {{ selectedSubmission.student_code }}</div>
+                            </div>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                            <div class="detail-info-card">
+                                <div class="detail-label">📝 Bài thi</div>
+                                <div class="detail-value">{{ selectedSubmission.test_title || selectedSubmission.test_id }}</div>
+                            </div>
+                            <div class="detail-info-card">
+                                <div class="detail-label">⭐ Điểm số</div>
+                                <div class="detail-value">
+                                    <n-tag :type="selectedSubmission.score >= 5 ? 'success' : 'error'" round style="font-weight: 700; font-size: 15px;">
+                                        {{ selectedSubmission.score }}/10
+                                    </n-tag>
+                                </div>
+                            </div>
+                            <div class="detail-info-card">
+                                <div class="detail-label">✅ Số câu đúng</div>
+                                <div class="detail-value" style="font-weight: 700; font-size: 16px; color: #0f172a;">
+                                    {{ selectedSubmission.correct_answers }}/{{ selectedSubmission.total_questions }}
+                                </div>
+                            </div>
+                            <div class="detail-info-card">
+                                <div class="detail-label">🕐 Thời gian nộp</div>
+                                <div class="detail-value">{{ selectedSubmission.submitted_at }}</div>
+                            </div>
+                        </div>
+
+                        <div style="text-align: center; padding: 12px 0 4px 0;">
+                            <n-tag :type="selectedSubmission.score >= 5 ? 'success' : 'error'" size="large" round style="font-size: 15px; font-weight: 700; padding: 6px 24px;">
+                                {{ selectedSubmission.score >= 5 ? '✓ ĐẠT' : '✗ CHƯA ĐẠT' }}
+                            </n-tag>
+                        </div>
+                    </div>
+                </n-modal>
             </div>
         </transition>
     </div>
@@ -2092,5 +2303,34 @@ async function exportByTest(testId, testCode) {
 .report-row:hover {
     box-shadow: 0 2px 10px rgba(99, 102, 241, 0.12);
     border-color: #a5b4fc;
+}
+
+/* Submission Detail Modal */
+.detail-info-card {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 14px 16px;
+    transition: box-shadow 0.2s ease;
+}
+
+.detail-info-card:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.detail-label {
+    font-size: 12px;
+    color: #64748b;
+    font-weight: 600;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.detail-value {
+    font-size: 14px;
+    color: #1e293b;
+    font-weight: 500;
+    word-break: break-word;
 }
 </style>
