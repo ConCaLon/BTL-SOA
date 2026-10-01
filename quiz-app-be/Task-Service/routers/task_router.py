@@ -4,6 +4,8 @@ from constants.all import QUESTION_SERVICE_URL, TEST_SERVICE_URL, STUDENT_SERVIC
 from configs.socket_manager import ConnectionManager
 import httpx
 import ssl
+import asyncio
+from datetime import datetime
 
 ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
@@ -260,11 +262,79 @@ async def get_student_history(student_code: str):
 
 @router.get("/admin/results")
 async def admin_get_results():
-    async with httpx.AsyncClient(verify=False) as client:
-        response = await client.get(f'{TEST_SERVICE_URL}/submissions')
-    if response.status_code == 200:
-        return response.json()
-    return {"status": "failed", "message": "Lỗi lấy kết quả thi"}
+    """Lấy danh sách bài nộp kèm tên bài thi và họ tên sinh viên cho Admin Dashboard"""
+    try:
+        async with httpx.AsyncClient(verify=False) as client:
+            # Gọi song song 3 service để lấy submissions, tests, students
+            sub_res, test_res, stu_res = await asyncio.gather(
+                client.get(f'{TEST_SERVICE_URL}/submissions'),
+                client.get(f'{TEST_SERVICE_URL}/tests'),
+                client.get(f'{STUDENT_SERVICE_URL}/students'),
+                return_exceptions=True
+            )
+
+        # Parse submissions
+        if isinstance(sub_res, Exception) or sub_res.status_code != 200:
+            return {"status": "failed", "message": "Lỗi lấy kết quả thi"}
+
+        sub_data = sub_res.json()
+        if sub_data.get("status") != "success":
+            return sub_data
+
+        submissions = sub_data.get("data", [])
+
+        # Build test_id -> title map từ Test-Service
+        test_map = {}
+        if not isinstance(test_res, Exception) and test_res.status_code == 200:
+            test_json = test_res.json()
+            if test_json.get("status") == "success":
+                for t in test_json.get("data", []):
+                    test_map[t.get("_id", "")] = t.get("name", "")
+
+        # Build student_code -> student_name map từ Student-Service
+        student_map = {}
+        if not isinstance(stu_res, Exception) and stu_res.status_code == 200:
+            stu_json = stu_res.json()
+            if stu_json.get("status") == "success":
+                for s in stu_json.get("data", []):
+                    code = s.get("student_code", "")
+                    if code:
+                        student_map[code] = s.get("student_name") or s.get("name") or ""
+
+        # Ghép dữ liệu trả về cho frontend
+        enriched = []
+        for s in submissions:
+            test_id = s.get("test_id", "")
+            student_code = s.get("student_code", "")
+
+            # Định dạng submitted_at thành dd/mm/yyyy hh:mm:ss
+            submitted_at_raw = s.get("submitted_at", "")
+            submitted_at_formatted = submitted_at_raw
+            try:
+                if submitted_at_raw:
+                    dt = datetime.fromisoformat(submitted_at_raw.replace("Z", "+00:00"))
+                    submitted_at_formatted = dt.strftime("%d/%m/%Y %H:%M:%S")
+            except Exception:
+                pass
+
+            enriched.append({
+                "id": s.get("_id", ""),
+                "student_code": student_code,
+                "student_name": student_map.get(student_code, ""),
+                "test_id": test_id,
+                "test_title": test_map.get(test_id, test_id),
+                "score": s.get("score", 0),
+                "correct_answers": s.get("correct_count", 0),
+                "total_questions": s.get("total_questions", 0),
+                "submitted_at": submitted_at_formatted
+            })
+
+        return {
+            "status": "success",
+            "data": enriched
+        }
+    except Exception as e:
+        return {"status": "failed", "message": f"Lỗi lấy kết quả thi: {str(e)}"}
 
 
 
