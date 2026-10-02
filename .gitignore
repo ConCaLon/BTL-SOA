@@ -16,5 +16,13 @@ __pycache__/
 # Environment
 .env
 
-# Node
+# Node & Vite Cache
 node_modules/
+.vite/
+quiz-app-fe/.vite/
+
+# Tam thoi an theo yeu cau
+README.md
+README1.md
+start_services.bat
+start_services.ps1
