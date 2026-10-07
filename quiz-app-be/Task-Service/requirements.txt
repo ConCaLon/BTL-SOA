@@ -6,3 +6,4 @@ httpx
 pymongo
 starlette
 websockets
+PyJWT

@@ -7,6 +7,8 @@ class CreateTest(BaseModel):
     name: str
     time: Union[int, str] = 45
     list_students: Optional[List[str]] = []
+    # Câu 5: Giới hạn số lượng sinh viên được thi
+    max_students: Optional[int] = 0  # 0 = không giới hạn
 
 
 class UpdateTest(BaseModel):
@@ -15,6 +17,8 @@ class UpdateTest(BaseModel):
     name: str
     time: Union[int, str] = 45
     list_students: Optional[List[str]] = []
+    # Câu 5: Giới hạn số lượng sinh viên được thi
+    max_students: Optional[int] = 0  # 0 = không giới hạn
 
 
 class DeleteTest(BaseModel):
@@ -34,6 +38,8 @@ class SubmitExam(BaseModel):
     student_code: str
     test_id: str
     answers: List[SubmitAnswerItem] = []
+    # Câu 9: Idempotency key để ngăn nộp bài trùng
+    idempotency_key: Optional[str] = ""
 
 
 class CascadeUpdateStudent(BaseModel):

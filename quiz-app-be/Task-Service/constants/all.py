@@ -12,3 +12,7 @@ QUESTION_SERVICE_URL = os.getenv("QUESTION_SERVICE_URL", "http://127.0.0.1:8002/
 AUTHEN_SERVICE_URL = os.getenv("AUTHEN_SERVICE_URL", "http://127.0.0.1:8001/authen_service")
 NOTIFICATION_SERVICE_URL = os.getenv("NOTIFICATION_SERVICE_URL", "http://127.0.0.1:8005/notification_service")
 REPORT_SERVICE_URL = os.getenv("REPORT_SERVICE_URL", "http://127.0.0.1:8006/report_service")
+
+# Câu 6 & 7: JWT Configuration (phải trùng với Authen-Service)
+JWT_SECRET = os.getenv("JWT_SECRET", "quiz-app-soa-secret-key-hunre-2024")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
