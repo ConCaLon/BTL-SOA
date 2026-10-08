@@ -1271,6 +1271,133 @@ async function exportByTest(testId, testCode) {
         reportExportingTestId.value = null
     }
 }
+
+// ================= PROCTORING SERVICE (GIÁM SÁT THI) =================
+const PROCTORING_BASE = "http://127.0.0.1:8007"
+const selectedProctorTestId = ref(null)
+const proctorViolations = ref([])
+const proctoringLoading = ref(false)
+
+const selectedProctorTest = computed(() => {
+    return tests.value.find(t => t._id === selectedProctorTestId.value) || null
+})
+
+const proctorTestOptions = computed(() => {
+    return tests.value.map(t => ({
+        label: `[${t.test_code}] ${t.name}`,
+        value: t._id
+    }))
+})
+
+const terminatedCount = computed(() => {
+    return proctorViolations.value.filter(v => (v.warning_count || 0) >= 3).length
+})
+
+async function fetchProctoringLogs() {
+    if (!selectedProctorTestId.value && tests.value.length > 0) {
+        selectedProctorTestId.value = tests.value[0]._id
+    }
+    if (!selectedProctorTestId.value) {
+        proctorViolations.value = []
+        return
+    }
+
+    proctoringLoading.value = true
+    try {
+        const testObj = tests.value.find(t => t._id === selectedProctorTestId.value)
+        const testIdToQuery = selectedProctorTestId.value
+        
+        let logs = []
+        // Gọi API lấy log theo test_id
+        const res = await axios.get(`${PROCTORING_BASE}/proctoring/violations/${testIdToQuery}`).catch(() => null)
+        if (res && res.data && res.data.status === 'success') {
+            logs = res.data.data || []
+        }
+
+        // Nếu log trống và test_code khác test_id, kiểm tra thêm theo test_code
+        if (logs.length === 0 && testObj && testObj.test_code && testObj.test_code !== testIdToQuery) {
+            const resCode = await axios.get(`${PROCTORING_BASE}/proctoring/violations/${testObj.test_code}`).catch(() => null)
+            if (resCode && resCode.data && resCode.data.status === 'success' && resCode.data.data?.length > 0) {
+                logs = resCode.data.data
+            }
+        }
+
+        proctorViolations.value = logs
+    } catch (e) {
+        console.error("Lỗi lấy nhật ký vi phạm Proctoring:", e)
+        proctorViolations.value = []
+    } finally {
+        proctoringLoading.value = false
+    }
+}
+
+const proctorColumns = [
+    {
+        title: 'Mã đề / Bài thi',
+        key: 'test_code',
+        width: 170,
+        render: (row) => {
+            const currentTest = tests.value.find(t => t._id === row.test_id || t.test_code === row.test_id)
+            const code = currentTest?.test_code || row.test_id
+            const name = currentTest?.name || ''
+            return h('div', { style: 'display: flex; flex-direction: column; gap: 3px;' }, [
+                h(NTag, { type: 'info', size: 'small', style: 'width: fit-content; font-weight: 600;' }, { default: () => code }),
+                name ? h('span', { style: 'font-size: 12px; color: #64748b; line-height: 1.3;' }, name) : null
+            ])
+        }
+    },
+    {
+        title: 'Sinh viên',
+        key: 'student_info',
+        width: 190,
+        render: (row) => {
+            const name = row.student_name || 'Chưa cập nhật tên'
+            const code = row.student_code || 'N/A'
+            return h('div', { style: 'display: flex; flex-direction: column; gap: 2px;' }, [
+                h('span', { style: 'font-size: 14px; color: #1e293b;' }, name),
+                h('span', { style: 'font-size: 12px; color: #64748b;' }, `MSV: ${code}`)
+            ])
+        }
+    },
+    {
+        title: 'Hành vi vi phạm',
+        key: 'violation_type',
+        width: 200,
+        render: (row) => {
+            if (row.violation_type === 'TAB_SWITCH') {
+                return h(NTag, { type: 'warning', size: 'small', style: 'background-color: #fff7ed; color: #c2410c; border-color: #ffedd5; font-weight: 500;' }, { default: () => 'Rời màn hình / Chuyển tab' })
+            } else if (row.violation_type === 'DEVTOOLS_OPEN') {
+                return h(NTag, { type: 'error', size: 'small', style: 'font-weight: 500;' }, { default: () => 'Mở DevTools (F12)' })
+            } else if (row.violation_type === 'EXIT_FULLSCREEN') {
+                return h(NTag, { type: 'warning', size: 'small', style: 'background-color: #fff7ed; color: #c2410c; border-color: #ffedd5; font-weight: 500;' }, { default: () => 'Thoát toàn màn hình' })
+            }
+            return h(NTag, { type: 'default', size: 'small' }, { default: () => row.violation_type || 'Khác' })
+        }
+    },
+    {
+        title: 'Chi tiết',
+        key: 'details',
+        render: (row) => h('span', { style: 'font-size: 13px; color: #475569;' }, row.details || 'Không có mô tả')
+    },
+    {
+        title: 'Số lần cảnh báo',
+        key: 'warning_count',
+        width: 170,
+        render: (row) => {
+            const count = row.warning_count || 1
+            if (count >= 3) {
+                return h(NTag, { type: 'error', size: 'small', style: 'font-weight: 700;' }, { default: () => `${count}/3 - Đã thu bài tự động` })
+            }
+            return h(NTag, { type: 'warning', size: 'small', style: 'font-weight: 600;' }, { default: () => `${count}/3` })
+        }
+    },
+    {
+        title: 'Thời gian ghi nhận',
+        key: 'created_at',
+        width: 170,
+        render: (row) => h('span', { style: 'font-size: 13px; color: #64748b; font-family: monospace;' }, row.created_at || 'N/A')
+    }
+]
 </script>
 
 <template>
@@ -1311,13 +1438,14 @@ async function exportByTest(testId, testCode) {
                         <div class="logo">
                             <h2>🛡️ Admin Panel</h2>
                         </div>
-                        <n-menu :value="activeTab" @update:value="async (val) => { activeTab = val; if (val === 'questions') { await fetchData(); await fetchQuestions(); } else if (val === 'wallpaper') { await fetchBgSettings(); } else if (val === 'report') { await fetchReportStats(); } else { fetchData(); } }" :options="[
+                        <n-menu :value="activeTab" @update:value="async (val) => { activeTab = val; if (val === 'questions') { await fetchData(); await fetchQuestions(); } else if (val === 'wallpaper') { await fetchBgSettings(); } else if (val === 'report') { await fetchReportStats(); } else if (val === 'proctoring') { await fetchProctoringLogs(); } else { fetchData(); } }" :options="[
                             { label: '📊 Tổng quan Dashboard', key: 'dashboard' },
                             { label: '📝 Quản lý Đề thi', key: 'tests' },
                             { label: '❓ Ngân hàng câu hỏi', key: 'questions' },
                             { label: '🏆 Kết quả thi', key: 'results' },
                             { label: '🎓 Danh sách sinh viên', key: 'students' },
                             { label: '📈 Báo cáo & Xuất Excel', key: 'report' },
+                            { label: '🛡️ Giám sát phòng thi', key: 'proctoring' },
                             { label: '🖼️ Cài đặt hình nền', key: 'wallpaper' }
                         ]" />
                         <div style="padding: 20px; position: absolute; bottom: 0;">
@@ -1336,6 +1464,7 @@ async function exportByTest(testId, testCode) {
                                 <span v-else-if="activeTab === 'students'">🎓 Quản lý Sinh viên & Tài khoản</span>
                                 <span v-else-if="activeTab === 'wallpaper'">🖼️ Cài Đặt Hình Nền Trang Đăng Nhập</span>
                                 <span v-else-if="activeTab === 'report'">📈 Báo cáo & Xuất Bảng Điểm Excel</span>
+                                <span v-else-if="activeTab === 'proctoring'">🛡️ Giám sát gian lận thi cử (Proctoring Realtime)</span>
                                 <span v-else>❓ Ngân hàng Câu hỏi</span>
                             </h2>
                             <div>
@@ -1343,6 +1472,7 @@ async function exportByTest(testId, testCode) {
                                 <n-button v-if="activeTab === 'students'" @click="openCreateStudentModal" type="info" style="margin-right: 10px;">+ Thêm Sinh Viên</n-button>
                                 <n-button v-if="activeTab === 'questions'" @click="openCreateModal" type="info" style="margin-right: 10px;">+ Thêm Câu Hỏi</n-button>
                                 <n-button v-if="activeTab === 'report'" @click="exportAllResults" type="success" style="margin-right: 10px;" :loading="reportExporting">📥 Xuất tất cả Excel</n-button>
+                                <n-button v-if="activeTab === 'proctoring'" @click="fetchProctoringLogs" type="success" style="margin-right: 10px; border-radius: 8px;" :loading="proctoringLoading">🔄 Làm mới dữ liệu</n-button>
                                 <n-button @click="fetchData" :loading="loading" type="primary" style="margin-right: 10px;">Làm mới</n-button>
                                 <n-button @click="isAuthenticated = false" type="error" ghost>Đăng xuất</n-button>
                             </div>
@@ -1541,6 +1671,72 @@ async function exportByTest(testId, testCode) {
                                 </div>
                                 <n-data-table v-else :columns="questionColumns" :data="questions" :loading="loading" :bordered="false" />
                             </n-card>
+
+                            <!-- TAB GIÁM SÁT PHÒNG THI (PROCTORING) -->
+                            <div v-if="activeTab === 'proctoring'" class="proctoring-panel">
+                                <!-- Khối 1: Bộ lọc đề thi (Card trên cùng) -->
+                                <n-card class="proctor-card" style="margin-bottom: 24px; border-radius: 16px; border: 1px solid #f1f5f9; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
+                                        <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
+                                            <strong style="color: #1e293b; font-size: 15px;">📝 Chọn Bài Thi Giám Sát:</strong>
+                                            <n-select 
+                                                v-model:value="selectedProctorTestId" 
+                                                :options="proctorTestOptions" 
+                                                placeholder="-- Chọn bài thi cần giám sát --"
+                                                @update:value="fetchProctoringLogs"
+                                                style="width: 340px;"
+                                            />
+                                            <n-button type="success" size="medium" @click="fetchProctoringLogs" :loading="proctoringLoading" style="border-radius: 8px;">
+                                                🔄 Tải lại dữ liệu
+                                            </n-button>
+                                        </div>
+
+                                        <div style="display: flex; gap: 10px; align-items: center;" v-if="selectedProctorTest">
+                                            <n-tag type="info" size="medium" round>
+                                                Mã đề: {{ selectedProctorTest.test_code }}
+                                            </n-tag>
+                                            <n-tag :type="proctorViolations.length > 0 ? 'warning' : 'success'" size="medium" round>
+                                                Tổng vi phạm: {{ proctorViolations.length }}
+                                            </n-tag>
+                                            <n-tag v-if="terminatedCount > 0" type="error" size="medium" round>
+                                                Đình chỉ (3/3): {{ terminatedCount }}
+                                            </n-tag>
+                                        </div>
+                                    </div>
+                                </n-card>
+
+                                <!-- Khối 2: Bảng nhật ký vi phạm (Card bên dưới) -->
+                                <n-card title="📋 Nhật ký vi phạm theo thời gian thực" class="proctor-card" style="border-radius: 16px; border: 1px solid #f1f5f9; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                                    <template #header-extra>
+                                        <span style="font-size: 13px; color: #64748b;" v-if="selectedProctorTest">
+                                            Đang giám sát bài thi: <strong style="color: #334155;">{{ selectedProctorTest.name }}</strong>
+                                        </span>
+                                    </template>
+
+                                    <div v-if="tests.length === 0" style="text-align: center; color: #94a3b8; padding: 48px;">
+                                        ⚠️ Chưa có bài thi nào trong hệ thống.
+                                    </div>
+                                    <div v-else-if="!selectedProctorTestId" style="text-align: center; color: #94a3b8; padding: 48px;">
+                                        👉 Vui lòng chọn một bài thi bên trên để xem nhật ký vi phạm.
+                                    </div>
+                                    <div v-else-if="proctorViolations.length === 0 && !proctoringLoading" style="text-align: center; color: #16a34a; padding: 56px 20px; background: #f0fdf4; border-radius: 14px; border: 1px dashed #86efac; margin: 12px 0;">
+                                        <div style="font-size: 32px; margin-bottom: 10px;">✅</div>
+                                        <div style="font-size: 16px; font-weight: 700; color: #15803d; margin-bottom: 6px;">
+                                            Chưa ghi nhận hành vi vi phạm nào!
+                                        </div>
+                                        <div style="font-size: 13px; color: #166534;">
+                                            Tất cả sinh viên tham gia đề thi này đều tuân thủ nghiêm ngặt quy chế phòng thi.
+                                        </div>
+                                    </div>
+                                    <n-data-table 
+                                        v-else 
+                                        :columns="proctorColumns" 
+                                        :data="proctorViolations" 
+                                        :loading="proctoringLoading" 
+                                        :bordered="false" 
+                                    />
+                                </n-card>
+                            </div>
 
                             <!-- TAB CÀI ĐẶT HÌNH NỀN ĐĂNG NHẬP -->
                             <div v-if="activeTab === 'wallpaper'" class="wallpaper-panel">

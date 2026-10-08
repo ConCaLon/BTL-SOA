@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from "vue"
+import { ref, computed, onMounted, onUnmounted, watch } from "vue"
 import axios from "axios";
 import ExamsHeader from '@/components/ExamsHeader.vue';
 import Question from "../components/Question.vue";
@@ -209,6 +209,115 @@ async function fetchStudentHistory() {
         historyLoading.value = false
     }
 }
+
+// ==========================================
+// PROCTORING SERVICE (GIÁM SÁT CHỐNG GIAN LẬN)
+// ==========================================
+const PROCTORING_API = "http://127.0.0.1:8007"
+
+// Trạng thái hiển thị modal cảnh báo vi phạm
+const showProctorWarningModal = ref(false)
+const proctorViolationInfo = ref({
+    currentWarning: 0,
+    maxWarnings: 3,
+    message: '',
+    shouldTerminate: false
+})
+
+let lastViolationReportTime = 0
+const VIOLATION_DEBOUNCE_MS = 1500 // Chống spam gửi 2 request liên tiếp khi blur và visibilitychange cùng kích hoạt
+
+async function reportViolation(violationType = "TAB_SWITCH", details = "Rời khỏi màn hình làm bài thi (chuyển tab hoặc mở ứng dụng khác)") {
+    // Chỉ ghi nhận khi đang làm bài thi, chưa nộp bài và modal cảnh báo chưa hiển thị
+    if (!show.value || submitted.value || showResult.value || showProctorWarningModal.value) return
+
+    const now = Date.now()
+    if (now - lastViolationReportTime < VIOLATION_DEBOUNCE_MS) {
+        return
+    }
+    lastViolationReportTime = now
+
+    const testId = test.value?._id || testCode.value
+    const studentCode = student.value?.student_code || email.value.toLowerCase().split("@")[0]
+    const studentName = student.value?.student_name || student.value?.name || fullName.value || "Sinh viên"
+
+    try {
+        const response = await axios.post(`${PROCTORING_API}/proctoring/log-violation`, {
+            test_id: String(testId),
+            student_code: String(studentCode),
+            student_name: studentName,
+            violation_type: violationType,
+            details: details
+        })
+
+        const resData = response.data
+        if (resData.status === "success") {
+            const currentWarning = resData.current_warning
+            const maxWarnings = resData.max_warnings || 3
+            const shouldTerminate = resData.should_terminate
+
+            proctorViolationInfo.value = {
+                currentWarning,
+                maxWarnings,
+                message: resData.message,
+                shouldTerminate
+            }
+            showProctorWarningModal.value = true
+
+            // Nếu đạt ngưỡng vi phạm >= 3: tự động nộp bài sau 3 giây hoặc khi xác nhận
+            if (shouldTerminate) {
+                setTimeout(() => {
+                    if (!submitted.value) {
+                        handleConfirmViolation()
+                    }
+                }, 3000)
+            }
+        }
+    } catch (err) {
+        console.error("Lỗi gửi cảnh báo tới Proctoring-Service:", err)
+    }
+}
+
+function handleVisibilityChange() {
+    if (document.hidden) {
+        reportViolation("TAB_SWITCH", "Rời khỏi màn hình làm bài thi (chuyển tab trình duyệt)")
+    }
+}
+
+function handleWindowBlur() {
+    // Bắt khi click chuột ra ngoài cửa sổ trình duyệt (mở Zalo, Discord, Word,...)
+    reportViolation("TAB_SWITCH", "Rời khỏi màn hình làm bài thi (mở ứng dụng khác ngoài trình duyệt)")
+}
+
+function startProctoringListeners() {
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    window.addEventListener("blur", handleWindowBlur)
+}
+
+function stopProctoringListeners() {
+    document.removeEventListener("visibilitychange", handleVisibilityChange)
+    window.removeEventListener("blur", handleWindowBlur)
+}
+
+function handleConfirmViolation() {
+    showProctorWarningModal.value = false
+    if (proctorViolationInfo.value.shouldTerminate) {
+        handleSubmit()
+    }
+}
+
+// Bật/tắt lắng nghe theo trạng thái phòng thi
+watch(show, (isExamActive) => {
+    if (isExamActive) {
+        startProctoringListeners()
+    } else {
+        stopProctoringListeners()
+    }
+})
+
+onUnmounted(() => {
+    stopProctoringListeners()
+})
 </script>
 
 <template>
@@ -343,6 +452,85 @@ async function fetchStudentHistory() {
                     </div>
                 </div>
             </div>
+        </n-modal>
+
+        <!-- Modal Cảnh báo Vi phạm Quy chế Thi (Proctoring) -->
+        <n-modal 
+            v-model:show="showProctorWarningModal" 
+            :mask-closable="false" 
+            :close-on-esc="false"
+            :closable="false"
+            preset="card" 
+            style="width: 520px; max-width: 95vw; border-radius: 20px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); border: 2px solid #f59e0b;"
+            :header-style="{ borderBottom: '1px solid #fed7aa', padding: '18px 24px' }"
+        >
+            <template #header>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 26px;">{{ proctorViolationInfo.shouldTerminate ? '🚨' : '⚠️' }}</span>
+                    <div>
+                        <div :style="{ color: proctorViolationInfo.shouldTerminate ? '#dc2626' : '#d97706', fontWeight: 800, fontSize: '18px' }">
+                            {{ proctorViolationInfo.shouldTerminate ? 'ĐÌNH CHỈ THI - TỰ ĐỘNG THU BÀI' : 'CẢNH BÁO VI PHẠM QUY CHẾ THI' }}
+                        </div>
+                        <div style="font-size: 12px; color: #64748b; font-weight: normal;">
+                            Hệ thống giám sát thi trực tuyến (Proctoring Service)
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <div style="text-align: center; padding: 12px 6px;">
+                <div style="margin-bottom: 16px;">
+                    <div style="display: inline-block; padding: 8px 18px; border-radius: 9999px; font-weight: 700; font-size: 14px;"
+                         :style="{
+                             backgroundColor: proctorViolationInfo.shouldTerminate ? '#fee2e2' : '#fef3c7',
+                             color: proctorViolationInfo.shouldTerminate ? '#b91c1c' : '#b45309'
+                         }">
+                        Số lần vi phạm: {{ proctorViolationInfo.currentWarning }} / {{ proctorViolationInfo.maxWarnings }}
+                    </div>
+                </div>
+
+                <p style="font-size: 15px; color: #1e293b; line-height: 1.6; margin-bottom: 14px;">
+                    <span v-if="proctorViolationInfo.shouldTerminate" style="color: #dc2626; font-weight: 700;">
+                        Bạn đã vi phạm quy chế quá {{ proctorViolationInfo.maxWarnings }} lần. Hệ thống tự động thu bài và kết thúc lượt thi ngay bây giờ!
+                    </span>
+                    <span v-else>
+                        Hệ thống phát hiện bạn vừa <strong>rời khỏi màn hình làm bài</strong> (chuyển sang tab khác hoặc bấm mở ứng dụng ngoài như Zalo, Discord, Word...).
+                    </span>
+                </p>
+
+                <div v-if="!proctorViolationInfo.shouldTerminate" style="background: #fffbeb; border: 1px dashed #f59e0b; border-radius: 12px; padding: 12px; margin-bottom: 20px; text-align: left; font-size: 13px; color: #92400e;">
+                    <strong>📌 Quy định phòng thi:</strong>
+                    <ul style="margin: 6px 0 0 18px; padding: 0;">
+                        <li>Tuyệt đối không chuyển tab hay chuyển đổi cửa sổ ứng dụng khác.</li>
+                        <li>Nếu vi phạm đạt mốc <strong>{{ proctorViolationInfo.maxWarnings }}/{{ proctorViolationInfo.maxWarnings }}</strong> lần, hệ thống sẽ <strong>tự động thu bài lập tức</strong>.</li>
+                    </ul>
+                </div>
+            </div>
+
+            <template #footer>
+                <n-button 
+                    v-if="!proctorViolationInfo.shouldTerminate"
+                    type="warning" 
+                    size="large" 
+                    block 
+                    strong 
+                    @click="handleConfirmViolation"
+                    style="font-weight: 700; height: 46px; border-radius: 10px;"
+                >
+                    Tôi đã hiểu và cam kết không tái phạm
+                </n-button>
+                <n-button 
+                    v-else
+                    type="error" 
+                    size="large" 
+                    block 
+                    strong 
+                    @click="handleConfirmViolation"
+                    style="font-weight: 700; height: 46px; border-radius: 10px;"
+                >
+                    Xác nhận nộp bài thi
+                </n-button>
+            </template>
         </n-modal>
     </div>
 </template>
