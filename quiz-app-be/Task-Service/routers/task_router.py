@@ -35,114 +35,144 @@ async def start_test(data: StartTest):
     # Lấy mã sinh viên từ email
     student_code = data.email.lower().split("@")[0]
 
-    async with httpx.AsyncClient(verify=False) as client:
-        await manager.send_personal_message("Đang xác thực sinh viên...", student_code)
+    try:
+        async with httpx.AsyncClient(verify=False) as client:
+            await manager.send_personal_message("Đang xác thực sinh viên...", student_code)
 
-        authen_response = await client.post(
-            url=f'{AUTHEN_SERVICE_URL}/validate_student',
-            json={
-                "email": data.email,
-                "password": data.password,
-                "full_name": data.full_name,
-                "class_name": data.class_name
+            try:
+                authen_response = await client.post(
+                    url=f'{AUTHEN_SERVICE_URL}/validate_student',
+                    json={
+                        "email": data.email,
+                        "password": data.password,
+                        "full_name": data.full_name,
+                        "class_name": data.class_name
+                    }
+                )
+            except httpx.RequestError as e:
+                return {
+                    "status": "failed",
+                    "message": f"Không thể kết nối đến Authen-Service (Port 8001). Vui lòng kiểm tra xem dịch vụ đã chạy chưa! ({str(e)})"
+                }
+
+        if authen_response.status_code != 200:
+            return {
+                "status": "failed",
+                "message": f"Lỗi xác thực (Mã {authen_response.status_code}): {authen_response.text}"
             }
-        )
 
-    if authen_response.status_code != 200:
-        return {
-            "status": "failed",
-            "message": f"Lỗi xác thực (Mã {authen_response.status_code}): {authen_response.text}"
-        }
-
-    if authen_response.json().get("status") == "failed":
-        error_msg = authen_response.json().get("message", "Xác thực thất bại!")
-        return {
-            "status": "failed",
-            "message": error_msg
-        }
-
-    async with httpx.AsyncClient(verify=False) as client:
-        await manager.send_personal_message("Đang lấy thông tin sinh viên...", student_code)
-
-        # Tạo sinh viên nếu chưa tồn tại, rồi lấy thông tin
-        await client.post(
-            url=f'{STUDENT_SERVICE_URL}/create_student',
-            json={
-                "student_code": student_code,
-                "student_name": data.full_name,
-                "name": data.full_name,
-                "class_name": data.class_name
+        if authen_response.json().get("status") == "failed":
+            error_msg = authen_response.json().get("message", "Xác thực thất bại!")
+            return {
+                "status": "failed",
+                "message": error_msg
             }
-        )
 
-        student_response = await client.post(
-            url=f'{STUDENT_SERVICE_URL}/get_student',
-            json={"student_code": student_code}
-        )
+        async with httpx.AsyncClient(verify=False) as client:
+            await manager.send_personal_message("Đang lấy thông tin sinh viên...", student_code)
 
-    if student_response.status_code != 200:
+            try:
+                # Tạo sinh viên nếu chưa tồn tại, rồi lấy thông tin
+                await client.post(
+                    url=f'{STUDENT_SERVICE_URL}/create_student',
+                    json={
+                        "student_code": student_code,
+                        "student_name": data.full_name,
+                        "name": data.full_name,
+                        "class_name": data.class_name
+                    }
+                )
+
+                student_response = await client.post(
+                    url=f'{STUDENT_SERVICE_URL}/get_student',
+                    json={"student_code": student_code}
+                )
+            except httpx.RequestError as e:
+                return {
+                    "status": "failed",
+                    "message": f"Không thể kết nối đến Student-Service (Port 8003): {str(e)}"
+                }
+
+        if student_response.status_code != 200:
+            return {
+                "status": "failed",
+                "message": "Không tìm thấy thông tin sinh viên!"
+            }
+
+        async with httpx.AsyncClient(verify=False) as client:
+            await manager.send_personal_message("Đang lấy thông tin bài thi...", student_code)
+
+            try:
+                test_response = await client.post(
+                    url=f'{TEST_SERVICE_URL}/get_test_by_code',
+                    json={"test_code": data.test_code}
+                )
+            except httpx.RequestError as e:
+                return {
+                    "status": "failed",
+                    "message": f"Không thể kết nối đến Test-Service (Port 8002): {str(e)}"
+                }
+
+        if test_response.status_code != 200 or test_response.json().get("status") == "failed":
+            return {
+                "status": "failed",
+                "message": "Mã đề không tồn tại!"
+            }
+
+        test_data = test_response.json()["data"]
+        test = test_data["test"]
+        student = student_response.json()["data"]
+        
+        # Hỗ trợ cả list_student và list_students
+        allowed_students = test.get('list_students') or test.get('list_student') or []
+        
+        # Nếu danh sách được cấu hình (không rỗng) thì mới kiểm tra
+        if len(allowed_students) > 0 and student.get('student_code') not in allowed_students:
+            return {
+                "status": "failed",
+                "message": "Sinh viên không có quyền truy cập bài thi này!"
+            }
+
+        # Lấy ID của test để truyền đi lấy câu hỏi
+        test_id = test["_id"]
+
+        async with httpx.AsyncClient(verify=False) as client:
+            await manager.send_personal_message("Đang lấy câu hỏi...", student_code)
+
+            try:
+                questions_response = await client.post(
+                    url=f'{QUESTION_SERVICE_URL}/get_questions',
+                    json={"test_id": test_id}
+                )
+            except httpx.RequestError as e:
+                return {
+                    "status": "failed",
+                    "message": f"Không thể kết nối đến Question-Service (Port 8002): {str(e)}"
+                }
+
+        if questions_response.status_code != 200:
+            return {
+                "status": "failed",
+                "message": "Không tìm thấy câu hỏi!"
+            }
+
+        # Thêm class_name vào student data trả về
+        student_data = student_response.json()["data"]
+        student_data["class_name"] = data.class_name
+
+        return {
+            "status": "success",
+            "data": {
+                "test": test,
+                "questions": questions_response.json()["data"],
+                "student": student_data
+            }
+        }
+    except Exception as e:
         return {
             "status": "failed",
-            "message": "Không tìm thấy thông tin sinh viên!"
+            "message": f"Lỗi hệ thống khi khởi tạo bài thi: {str(e)}"
         }
-
-    async with httpx.AsyncClient(verify=False) as client:
-        await manager.send_personal_message("Đang lấy thông tin bài thi...", student_code)
-
-        test_response = await client.post(
-            url=f'{TEST_SERVICE_URL}/get_test_by_code',
-            json={"test_code": data.test_code}
-        )
-
-    if test_response.status_code != 200 or test_response.json().get("status") == "failed":
-        return {
-            "status": "failed",
-            "message": "Mã đề không tồn tại!"
-        }
-
-    test_data = test_response.json()["data"]
-    test = test_data["test"]
-    student = student_response.json()["data"]
-    
-    # Hỗ trợ cả list_student và list_students
-    allowed_students = test.get('list_students') or test.get('list_student') or []
-    
-    # Nếu danh sách được cấu hình (không rỗng) thì mới kiểm tra
-    if len(allowed_students) > 0 and student.get('student_code') not in allowed_students:
-        return {
-            "status": "failed",
-            "message": "Sinh viên không có quyền truy cập bài thi này!"
-        }
-
-    # Lấy ID của test để truyền đi lấy câu hỏi
-    test_id = test["_id"]
-
-    async with httpx.AsyncClient(verify=False) as client:
-        await manager.send_personal_message("Đang lấy câu hỏi...", student_code)
-
-        questions_response = await client.post(
-            url=f'{QUESTION_SERVICE_URL}/get_questions',
-            json={"test_id": test_id}
-        )
-
-    if questions_response.status_code != 200:
-        return {
-            "status": "failed",
-            "message": "Không tìm thấy câu hỏi!"
-        }
-
-    # Thêm class_name vào student data trả về
-    student_data = student_response.json()["data"]
-    student_data["class_name"] = data.class_name
-
-    return {
-        "status": "success",
-        "data": {
-            "test": test,
-            "questions": questions_response.json()["data"],
-            "student": student_data
-        }
-    }
 
 
 @router.post("/submit_test")
@@ -150,47 +180,59 @@ async def submit_test(data: SubmitTest):
     """
     Orchestrator: Nhận bài làm từ frontend → chuyển tiếp đến Test-Service để chấm điểm.
     """
-    async with httpx.AsyncClient(verify=False) as client:
-        await manager.send_personal_message("Đang nộp bài...", data.student_code)
+    try:
+        async with httpx.AsyncClient(verify=False) as client:
+            await manager.send_personal_message("Đang nộp bài...", data.student_code)
 
-        submit_response = await client.post(
-            url=f'{TEST_SERVICE_URL}/submit_exam',
-            json={
-                "student_code": data.student_code,
-                "test_id": data.test_id,
-                "answers": [a.dict() for a in data.answers]
-            }
-        )
-
-    if submit_response.status_code != 200:
-        return {
-            "status": "failed",
-            "message": "Lỗi khi nộp bài!"
-        }
-
-    result = submit_response.json()
-
-    if result.get("status") == "success":
-        await manager.send_personal_message("Nộp bài thành công!", data.student_code)
-
-        # Gửi thông báo kết quả qua Notification Service
-        try:
-            score = result.get("data", {}).get("score", 0)
-            correct = result.get("data", {}).get("correct_count", 0)
-            total = result.get("data", {}).get("total_questions", 0)
-            async with httpx.AsyncClient(verify=False) as client:
-                await client.post(
-                    url=f'{NOTIFICATION_SERVICE_URL}/send',
+            try:
+                submit_response = await client.post(
+                    url=f'{TEST_SERVICE_URL}/submit_exam',
                     json={
                         "student_code": data.student_code,
-                        "message": f"Kết quả bài thi: {score}/10 ({correct}/{total} câu đúng)",
-                        "notification_type": "result"
+                        "test_id": data.test_id,
+                        "answers": [a.dict() for a in data.answers]
                     }
                 )
-        except Exception as e:
-            print(f"Notification error: {e}")
-            
-    return result
+            except httpx.RequestError as e:
+                return {
+                    "status": "failed",
+                    "message": f"Không thể kết nối đến Test-Service (Port 8002): {str(e)}"
+                }
+
+        if submit_response.status_code != 200:
+            return {
+                "status": "failed",
+                "message": "Lỗi khi nộp bài!"
+            }
+
+        result = submit_response.json()
+
+        if result.get("status") == "success":
+            await manager.send_personal_message("Nộp bài thành công!", data.student_code)
+
+            # Gửi thông báo kết quả qua Notification Service
+            try:
+                score = result.get("data", {}).get("score", 0)
+                correct = result.get("data", {}).get("correct_count", 0)
+                total = result.get("data", {}).get("total_questions", 0)
+                async with httpx.AsyncClient(verify=False) as client:
+                    await client.post(
+                        url=f'{NOTIFICATION_SERVICE_URL}/send',
+                        json={
+                            "student_code": data.student_code,
+                            "message": f"Kết quả bài thi: {score}/10 ({correct}/{total} câu đúng)",
+                            "notification_type": "result"
+                        }
+                    )
+            except Exception as e:
+                print(f"Notification error: {e}")
+                
+        return result
+    except Exception as e:
+        return {
+            "status": "failed",
+            "message": f"Lỗi hệ thống khi nộp bài: {str(e)}"
+        }
 
 @router.get("/admin/students")
 async def admin_get_students():
